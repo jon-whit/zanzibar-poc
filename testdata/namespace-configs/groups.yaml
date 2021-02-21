@@ -1,0 +1,10 @@
+name: groups
+relations:
+- name: member
+  userset_rewrite:
+    union:
+    - tuple_to_userset:
+        tupleset:
+          relation: parent
+        computed_userset:
+          relation: member

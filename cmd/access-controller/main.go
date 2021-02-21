@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -41,10 +40,11 @@ func main() {
 
 	flag.Parse()
 
-	pool, err := pgxpool.Connect(context.TODO(), "postgresql://jonwhitaker@localhost:5432/postgres?pool_max_conns=20")
+	var pool *pgxpool.Pool
+	/*pool, err := pgxpool.Connect(context.TODO(), "postgresql://jonwhitaker@localhost:5432/postgres?pool_max_conns=20")
 	if err != nil {
 		log.Fatalf("Failed to establish a connection to Postgres: %v", err)
-	}
+	}*/
 
 	datastore := &datastores.SQLStore{
 		ConnPool: pool,
@@ -58,12 +58,12 @@ func main() {
 				Hasher:            &hasher{},
 				PartitionCount:    3,
 				ReplicationFactor: 2,
-				Load:              2,
+				Load:              1.5,
 			}),
 		},
 	}
 
-	memberlistConfig := memberlist.DefaultLocalConfig()
+	memberlistConfig := memberlist.DefaultLANConfig()
 	memberlistConfig.Name = node.ID
 
 	if *advertise != "" {
@@ -79,7 +79,7 @@ func main() {
 	}
 	node.Memberlist = list
 
-	controller, err := accesscontroller.NewAccessController(pool, datastore, "../../testdata/namespace-configs")
+	controller, err := accesscontroller.NewAccessController(pool, datastore, "./testdata/namespace-configs")
 	if err != nil {
 		log.Fatalf("Failed to initialize the Access Controller: %v", err)
 	}
@@ -96,8 +96,11 @@ func main() {
 
 	if *join != "" {
 		joinAddrs := strings.Split(*join, ",")
-		if _, err := list.Join(joinAddrs); err != nil {
-			panic("Failed to join cluster: " + err.Error())
+		if numJoined, err := list.Join(joinAddrs); err != nil {
+			if numJoined < 1 {
+				// todo: account for this node
+				panic("Failed to join cluster: " + err.Error())
+			}
 		}
 	}
 

@@ -1,3 +1,4 @@
 FROM alpine
-ENTRYPOINT ["/bin/access-controller"]
-COPY /bin/access-controller /bin
+COPY access-controller /bin
+COPY testdata /bin/testdata
+WORKDIR /bin

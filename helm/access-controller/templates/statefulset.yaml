@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "access-controller.fullname" . }}
+  labels:
+    {{- include "access-controller.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "access-controller.fullname" . }}
+  replicas: {{ .Values.statefulset.replicas | int64 }}
+  selector:
+    matchLabels:
+      {{- include "access-controller.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "access-controller.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "access-controller.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+              {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - /bin/sh
+            - "-ec"
+            - |
+              access-controller --advertise="${ADVERTISE_IP}" \
+              --join=
+              {{- if .Values.conf.join }}
+                {{- join `,` .Values.conf.join -}}
+              {{- else }}
+                {{- include "access-controller.joinAddresses" . -}}
+              {{- end }}
+              {{- if .Values.tls.enabled }}
+              --certs-dir=/etc/certs/
+              {{- else }}
+              --insecure
+              {{- end }}
+          env:
+            - name: ADVERTISE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: STATEFULSET_NAME
+              value: {{ include "access-controller.fullname" . }}
+            - name: STATEFULSET_FQDN
+              value: {{ include "access-controller.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+          ports:
+            - containerPort: {{ .Values.service.ports.gossip.port }}
+              protocol: TCP
+              name: gossip-tcp
+            - containerPort: {{ .Values.service.ports.grpc.port }}
+              protocol: TCP
+              name: grpc
+          # livenessProbe:
+          #   httpGet:
+          #     path: /
+          #     port: http
+          # readinessProbe:
+          #   httpGet:
+          #     path: /
+          #     port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

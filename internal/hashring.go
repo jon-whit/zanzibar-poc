@@ -3,6 +3,7 @@ package accesscontroller
 import (
 	"context"
 	"hash/crc32"
+	"sync"
 
 	"github.com/buraksezer/consistent"
 )
@@ -49,22 +50,32 @@ func FromContext(ctx context.Context) (uint32, bool) {
 }
 
 type ConsistentHashring struct {
+	rw   sync.RWMutex
 	Ring *consistent.Consistent
 }
 
 func (ch *ConsistentHashring) Add(member HashringMember) {
+	defer ch.rw.Unlock()
+	ch.rw.Lock()
 	ch.Ring.Add(consistent.Member(member))
 }
 
 func (ch *ConsistentHashring) Remove(member HashringMember) {
+	defer ch.rw.Unlock()
+	ch.rw.Lock()
 	ch.Ring.Remove(member.String())
 }
 
 func (ch *ConsistentHashring) LocateKey(key []byte) string {
+	defer ch.rw.RUnlock()
+	ch.rw.RLock()
 	return ch.Ring.LocateKey(key).String()
 }
 
 func (ch *ConsistentHashring) Checksum() uint32 {
+	defer ch.rw.RUnlock()
+	ch.rw.RLock()
+
 	members := ch.Ring.GetMembers()
 
 	bytes := []byte{}

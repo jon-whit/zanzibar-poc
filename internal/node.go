@@ -61,7 +61,7 @@ func (n *Node) NotifyJoin(member *memberlist.Node) {
 	}
 
 	n.Hashring.Add(member)
-	fmt.Printf("hashring checksum: %d\n", n.Hashring.Checksum())
+	log.Infof("hashring checksum: %d\n", n.Hashring.Checksum())
 }
 
 // NotifyLeave is invoked when a node leaves the cluster. The
@@ -76,7 +76,7 @@ func (n *Node) NotifyLeave(member *memberlist.Node) {
 	}
 
 	n.Hashring.Remove(member)
-	fmt.Printf("hashring checksum: %d\n", n.Hashring.Checksum())
+	log.Infof("hashring checksum: %d\n", n.Hashring.Checksum())
 }
 
 // NotifyUpdate is invoked when a node in the cluster is updated,

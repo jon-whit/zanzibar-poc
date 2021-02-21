@@ -1,0 +1,25 @@
+name: projects
+relations:
+- name: owner
+
+- name: viewer
+  userset_rewrite:
+    union:
+    - tuple_to_userset:
+        tupleset:
+          relation: parent
+        computed_userset:
+          relation: viewer
+    - tuple_to_userset:
+        tupleset:
+          relation: owner
+        computed_userset:
+          relation: member
+    - computed_userset:
+        relation: editor
+
+- name: editor
+  userset_rewrite:
+    union:
+    - computed_userset:
+        relation: owner

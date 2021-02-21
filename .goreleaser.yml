@@ -1,12 +1,16 @@
+project_name: access-controller
+
 before:
   hooks:
     - go mod download
     - go generate ./...
 builds:
   - main: ./cmd/access-controller/main.go
-    binary: /bin/access-controller
+    binary: bin/access-controller
     env:
       - CGO_ENABLED=0
+    goarch:
+      - amd64
     goos:
       - linux
       - darwin
@@ -23,6 +27,10 @@ dockers:
     - "iam/access-controller:v{{ .Major }}"
     - "iam/access-controller:v{{ .Major }}.{{ .Minor }}"
     - "iam/access-controller:latest"
+    - "iam/access-controller:zanzibar"
+    - "jonwhit/access-controller:zanzibar"
+    extra_files:
+    - testdata
 checksum:
   name_template: 'checksums.txt'
 snapshot:
