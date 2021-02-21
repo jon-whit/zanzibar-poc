@@ -57,10 +57,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            - name: STATEFULSET_NAME
-              value: {{ include "access-controller.fullname" . }}
-            - name: STATEFULSET_FQDN
-              value: {{ include "access-controller.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
           ports:
             - containerPort: {{ .Values.service.ports.gossip.port }}
               protocol: TCP
@@ -68,14 +64,6 @@ spec:
             - containerPort: {{ .Values.service.ports.grpc.port }}
               protocol: TCP
               name: grpc
-          # livenessProbe:
-          #   httpGet:
-          #     path: /
-          #     port: http
-          # readinessProbe:
-          #   httpGet:
-          #     path: /
-          #     port: http
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

@@ -56,9 +56,9 @@ func main() {
 		Hashring: &accesscontroller.ConsistentHashring{
 			Ring: consistent.New(nil, consistent.Config{
 				Hasher:            &hasher{},
-				PartitionCount:    3,
-				ReplicationFactor: 2,
-				Load:              1.5,
+				PartitionCount:    31,
+				ReplicationFactor: 3,
+				Load:              1.25,
 			}),
 		},
 	}
@@ -104,7 +104,7 @@ func main() {
 		}
 	}
 
-	addr := fmt.Sprintf("%s:%d", list.LocalNode().Addr.String(), *serverPort)
+	addr := fmt.Sprintf(":%d", *serverPort)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("Failed to start the TCP listener for '%v': %v", addr, err)

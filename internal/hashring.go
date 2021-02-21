@@ -3,6 +3,8 @@ package accesscontroller
 import (
 	"context"
 	"hash/crc32"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/buraksezer/consistent"
@@ -76,12 +78,17 @@ func (ch *ConsistentHashring) Checksum() uint32 {
 	defer ch.rw.RUnlock()
 	ch.rw.RLock()
 
-	members := ch.Ring.GetMembers()
-
-	bytes := []byte{}
-	for _, member := range members {
-		bytes = append(bytes, []byte(member.String())...)
+	memberSet := make(map[string]struct{})
+	for _, member := range ch.Ring.GetMembers() {
+		memberSet[member.String()] = struct{}{}
 	}
 
+	members := make([]string, 0, len(memberSet))
+	for member := range memberSet {
+		members = append(members, member)
+	}
+
+	sort.Strings(members)
+	bytes := []byte(strings.Join(members, ","))
 	return crc32.ChecksumIEEE(bytes)
 }
