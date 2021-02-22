@@ -50,18 +50,27 @@ func main() {
 		ConnPool: pool,
 	}
 
+	ring := consistent.New(nil, consistent.Config{
+		Hasher:            &hasher{},
+		PartitionCount:    31,
+		ReplicationFactor: 3,
+		Load:              1.25,
+	})
+
 	node := accesscontroller.Node{
 		ID:        *serverID,
 		RpcRouter: accesscontroller.NewMapClientRouter(),
 		Hashring: &accesscontroller.ConsistentHashring{
-			Ring: consistent.New(nil, consistent.Config{
-				Hasher:            &hasher{},
-				PartitionCount:    31,
-				ReplicationFactor: 3,
-				Load:              1.25,
-			}),
+			Ring: ring,
 		},
 	}
+
+	go func() {
+		for {
+			time.Sleep(4 * time.Second)
+			fmt.Printf("checksum '%d', memberlist '%v'\n", node.Hashring.Checksum(), ring.GetMembers())
+		}
+	}()
 
 	memberlistConfig := memberlist.DefaultLANConfig()
 	memberlistConfig.Name = node.ID

@@ -1,5 +1,5 @@
 image:
-  repository: jonwhit/access-controller
+  repository: gcr.io/jon-whit/iam/access-controller
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   tag: "zanzibar"
