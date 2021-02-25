@@ -234,7 +234,7 @@ type NamespaceConfig struct {
 }
 
 type RelationTupleQuery struct {
-	Object   Object
-	Relation string
-	User     User
+	Object    Object
+	Relations []string
+	Subject   Subject
 }

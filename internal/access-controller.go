@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jackc/pgx/v4/pgxpool"
-	pb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
+	"github.com/hashicorp/go-multierror"
+	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,52 +17,57 @@ import (
 )
 
 type AccessController struct {
-	pb.UnimplementedCheckServiceServer
-	pb.UnimplementedWriteServiceServer
+	aclpb.UnimplementedCheckServiceServer
+	aclpb.UnimplementedWriteServiceServer
+	aclpb.UnimplementedReadServiceServer
 
 	*Node
-	db *pgxpool.Pool
 	RelationTupleStore
 	computedRules map[string]UsersetRewrite
 }
 
-func (a *AccessController) computedUserset(object Object, relation string) []Userset {
+func (a *AccessController) expandComputedUsersets(object Object, relation string) []Userset {
 
 	rules, ok := a.computedRules[object.Namespace+"#"+relation]
 	if !ok || len(rules.Union) == 0 {
 		return []Userset{}
 	}
 
-	var res []Userset
+	var computedUsersets []Userset
 	for _, alias := range rules.Union {
 		aliasRelation := alias.ComputedUserset.Relation
 		if aliasRelation == "" {
 			continue
 		}
 
-		res = append(res, Userset{
+		computedUsersets = append(computedUsersets, Userset{
 			Object:   object,
 			Relation: aliasRelation,
 		})
 	}
 
-	return res
+	for _, computedSet := range computedUsersets {
+		computedUsersets = append(computedUsersets, a.expandComputedUsersets(computedSet.Object, computedSet.Relation)...)
+	}
+
+	return computedUsersets
 }
 
-func (a *AccessController) tupleUserset(object Object, relation string) []Userset {
+func (a *AccessController) expandTupleUsersets(object Object, relation string) []Userset {
 	rules, ok := a.computedRules[object.Namespace+"#"+relation]
 	if !ok || len(rules.Union) == 0 {
 		return []Userset{}
 	}
 
-	var res []Userset
+	var res, tupleUsersets []Userset
 	for _, alias := range rules.Union {
 		tuplesetRelation := alias.TupleToUserset.Tupleset.Relation
+
 		if tuplesetRelation == "" {
 			continue
 		}
 
-		usersets, err := a.RelationTupleStore.Usersets(object, tuplesetRelation)
+		usersets, err := a.RelationTupleStore.Usersets(context.TODO(), object, tuplesetRelation)
 		if err != nil {
 			log.Fatalf("Failed to get Usersets: %v", err)
 		}
@@ -89,17 +94,21 @@ func (a *AccessController) tupleUserset(object Object, relation string) []Userse
 		}
 	}
 
-	return res
+	tupleUsersets = append(tupleUsersets, res...)
+	for _, tupleSet := range res {
+		tupleUsersets = append(tupleUsersets, a.expandTupleUsersets(tupleSet.Object, tupleSet.Relation)...)
+	}
+
+	return tupleUsersets
 }
 
-func NewAccessController(pool *pgxpool.Pool, store RelationTupleStore, rewriteRulesPath string) (*AccessController, error) {
+func NewAccessController(store RelationTupleStore, rewriteRulesPath string) (*AccessController, error) {
 	rules, err := LoadRewriteRules(rewriteRulesPath)
 	if err != nil {
 		panic(err)
 	}
 
 	return &AccessController{
-		db:                 pool,
 		computedRules:      rules,
 		RelationTupleStore: store,
 	}, nil
@@ -151,7 +160,147 @@ func LoadRewriteRules(root string) (map[string]UsersetRewrite, error) {
 	return res, err
 }
 
-func (a *AccessController) Check(ctx context.Context, req *pb.CheckRequest) (*pb.CheckResponse, error) {
+func (a *AccessController) checkDirectRelations(ctx context.Context, object Object, relation string, subject Subject, allowed chan<- bool) error {
+
+	done := make(chan struct{})
+	errCh := make(chan error)
+	go func() {
+		defer func() { done <- struct{}{} }()
+
+		computedUsersets := a.expandComputedUsersets(object, relation)
+
+		relations := []string{relation}
+		for _, computedSet := range computedUsersets {
+			relations = append(relations, computedSet.Relation)
+		}
+
+		fmt.Printf("(%s:%s) relations '%v'\n", object.Namespace, object.ID, relations)
+
+		count, err := a.RelationTupleStore.RowCount(ctx, RelationTupleQuery{
+			Object:    object,
+			Relations: relations,
+			Subject:   subject,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		if count > 0 {
+			allowed <- true
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	case <-done:
+		return nil
+	}
+}
+
+func (a *AccessController) checkIndirectRelations(ctx context.Context, object Object, relation string, subject Subject, allowed chan<- bool) error {
+
+	done := make(chan struct{})
+	errCh := make(chan error)
+	go func() {
+		defer func() { done <- struct{}{} }()
+
+		computedUsersets := a.expandComputedUsersets(object, relation)
+
+		relations := []string{relation}
+		for _, computedSet := range computedUsersets {
+			relations = append(relations, computedSet.Relation)
+		}
+
+		usersets, err := a.RelationTupleStore.Usersets(ctx, object, relations...)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		for _, userset := range usersets {
+			// todo: these checks can be run concurrently
+			resp, err := a.Check(ctx, &aclpb.CheckRequest{
+				Namespace: userset.Object.Namespace,
+				Object:    userset.Object.ID,
+				Relation:  userset.Relation,
+				Subject: &aclpb.Subject{
+					Ref: &aclpb.Subject_Id{
+						Id: subject.String(),
+					},
+				},
+			})
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			if resp.Allowed {
+				allowed <- true
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	case <-done:
+		return nil
+	}
+}
+
+func (a *AccessController) checkInheritedRelations(ctx context.Context, object Object, relation string, subject Subject, allowed chan<- bool) error {
+
+	done := make(chan struct{})
+	errCh := make(chan error)
+	go func() {
+		defer func() { done <- struct{}{} }()
+
+		tupleUsersets := a.expandTupleUsersets(object, relation)
+
+		for _, tupleSet := range tupleUsersets {
+			resp, err := a.Check(ctx, &aclpb.CheckRequest{
+				Namespace: tupleSet.Object.Namespace,
+				Object:    tupleSet.Object.ID,
+				Relation:  tupleSet.Relation,
+				Subject: &aclpb.Subject{
+					Ref: &aclpb.Subject_Id{
+						Id: subject.String(),
+					},
+				},
+			})
+			if err != nil {
+				if err == context.Canceled {
+				} else {
+					errCh <- err
+					return
+				}
+			}
+
+			if resp.Allowed {
+				allowed <- true
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	case <-done:
+		return nil
+	}
+}
+
+func (a *AccessController) Check(ctx context.Context, req *aclpb.CheckRequest) (*aclpb.CheckResponse, error) {
 
 	if peerChecksum, ok := FromContext(ctx); ok {
 		// The hash ring checksum of the peer should always be present if the
@@ -172,7 +321,7 @@ func (a *AccessController) Check(ctx context.Context, req *pb.CheckRequest) (*pb
 			// todo: handle error better
 		}
 
-		client, ok := c.(pb.CheckServiceClient)
+		client, ok := c.(aclpb.CheckServiceClient)
 		if !ok {
 			// todo: handle error better
 		}
@@ -195,7 +344,7 @@ func (a *AccessController) Check(ctx context.Context, req *pb.CheckRequest) (*pb
 				continue
 			}
 
-			client, ok := c.(pb.CheckServiceClient)
+			client, ok := c.(aclpb.CheckServiceClient)
 			if !ok {
 				// todo: handle error better
 			}
@@ -208,148 +357,82 @@ func (a *AccessController) Check(ctx context.Context, req *pb.CheckRequest) (*pb
 	}
 
 LABEL:
-	namespace := req.GetNamespace()
-	relation := req.GetRelation()
-	subject := SubjectFromProto(req.GetSubject())
-	subjectStr := subject.String()
-
 	object := Object{
-		Namespace: namespace,
+		Namespace: req.GetNamespace(),
 		ID:        objectStr,
 	}
+	relation := req.GetRelation()
+	subject := SubjectFromProto(req.GetSubject())
 
-	// evaluate leaf nodes CHECK(U, object#relation) including immediate
-	// userset rewrites
-	computedUsersets := []Userset{}
-	computedUsersets = append(computedUsersets, a.computedUserset(object, relation)...)
+	//cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	for _, computedSet := range computedUsersets {
-		computedUsersets = append(computedUsersets, a.computedUserset(computedSet.Object, computedSet.Relation)...)
-	}
-	computedUsersets = append(computedUsersets, Userset{
-		Object:   object,
-		Relation: relation,
+	allowed := make(chan bool)
+
+	group := multierror.Group{}
+	group.Go(func() error {
+		// evaluate leaf nodes CHECK(U, object#relation) including immediate
+		// userset rewrites
+		return a.checkDirectRelations(cctx, object, relation, subject, allowed)
 	})
 
-	relations := []string{}
-	for _, computedSet := range computedUsersets {
-		relations = append(relations, computedSet.Relation)
-	}
+	group.Go(func() error {
+		// evaluate indirect relations from the userset rewrites
+		return a.checkIndirectRelations(cctx, object, relation, subject, allowed)
+	})
 
-	fmt.Printf("(%s:%s) relations '%v'\n", object.Namespace, object.ID, relations)
+	group.Go(func() error {
+		// evaluate relations for inherited relations
+		return a.checkInheritedRelations(cctx, object, relation, subject, allowed)
+	})
 
-	conn, err := a.db.Acquire(context.Background())
-	if err != nil {
-		log.Fatalf("Failed to acquire db conn: %v", err)
-	}
+	wgDone := make(chan struct{})
+	var multierr *multierror.Error
+	go func() {
+		multierr = group.Wait()
+		wgDone <- struct{}{}
+	}()
 
-	args := []interface{}{object.ID, relations, subjectStr}
-	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE object=$1 AND relation=any($2) AND "user"=$3`, object.Namespace)
-
-	var count int
-	row := conn.QueryRow(context.Background(), query, args...)
-	if err := row.Scan(&count); err != nil {
-		log.Fatalf("Failed to Scan the database row in: %v", err)
-	}
-
-	if count > 0 {
-		return &pb.CheckResponse{
+	select {
+	case <-allowed:
+		return &aclpb.CheckResponse{
 			Allowed: true,
 		}, nil
-	}
-
-	// evaluate indirect relations from the userset rewrites
-	args = []interface{}{object.ID, relations}
-	query = fmt.Sprintf(`SELECT "user" FROM %s WHERE object=$1 AND relation=any($2) AND "user" LIKE '_%%:_%%#_%%'`, object.Namespace)
-
-	rows, err := conn.Query(context.Background(), query, args...)
-	if err != nil {
-		log.Fatalf("Failed to query indirect ACLs: %v", err)
-	}
-
-	usersets := []Userset{}
-	for rows.Next() {
-		var s string
-		err := rows.Scan(&s)
-		if err != nil {
-			log.Fatalf("Failed to Scan the database row in: %v", err)
-		}
-
-		subjectSet, err := SubjectSetFromString(s)
-		if err != nil {
+	case <-wgDone:
+		if err := multierr.ErrorOrNil(); err != nil {
 			return nil, err
 		}
 
-		userset := Userset{
-			Object: Object{
-				Namespace: subjectSet.Namespace,
-				ID:        subjectSet.Object,
-			},
-			Relation: subjectSet.Relation,
-		}
-
-		usersets = append(usersets, userset)
+		return &aclpb.CheckResponse{
+			Allowed: false,
+		}, nil
+	case <-cctx.Done():
+		return nil, cctx.Err()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	rows.Close()
-	conn.Release()
-
-	for _, userset := range usersets {
-		resp, err := a.Check(ctx, &pb.CheckRequest{
-			Namespace: userset.Object.Namespace,
-			Object:    userset.Object.ID,
-			Relation:  userset.Relation,
-			Subject: &pb.Subject{
-				Ref: &pb.Subject_Id{
-					Id: subjectStr,
-				},
-			},
-		})
-		if err != nil {
-			log.Fatalf("Check failed: %v", err)
-		}
-
-		if resp.Allowed {
-			return &pb.CheckResponse{
-				Allowed: true,
-			}, nil
-		}
-	}
-
-	// evaluate relations for inherited relations
-	tupleUsersets := []Userset{}
-	tupleUsersets = append(tupleUsersets, a.tupleUserset(object, relation)...)
-
-	for _, tupleSet := range tupleUsersets {
-		tupleUsersets = append(tupleUsersets, a.tupleUserset(tupleSet.Object, tupleSet.Relation)...)
-	}
-
-	for _, tupleSet := range tupleUsersets {
-		resp, err := a.Check(ctx, &pb.CheckRequest{
-			Namespace: tupleSet.Object.Namespace,
-			Object:    tupleSet.Object.ID,
-			Relation:  tupleSet.Relation,
-			Subject: &pb.Subject{
-				Ref: &pb.Subject_Id{
-					Id: subjectStr,
-				},
-			},
-		})
-		if err != nil {
-			log.Fatalf("Check failed: %v", err)
-		}
-
-		if resp.Allowed {
-			return &pb.CheckResponse{
-				Allowed: true,
-			}, nil
-		}
-	}
-
-	return &pb.CheckResponse{
-		Allowed: false,
-	}, nil
 }
 
-func (a *AccessController) WriteRelationTuplesTxn(ctx context.Context, req *pb.WriteRelationTuplesTxnRequest) (*pb.WriteRelationTuplesTxnResponse, error) {
+func (a *AccessController) WriteRelationTuplesTxn(ctx context.Context, req *aclpb.WriteRelationTuplesTxnRequest) (*aclpb.WriteRelationTuplesTxnResponse, error) {
 	return nil, fmt.Errorf("Not Implemented")
+}
+
+func (a *AccessController) ListRelationTuples(ctx context.Context, req *aclpb.ListRelationTuplesRequest) (*aclpb.ListRelationTuplesResponse, error) {
+
+	tuples, err := a.RelationTupleStore.ListRelationTuples(ctx, req.GetQuery(), req.GetExpandMask())
+	if err != nil {
+		return nil, err
+	}
+
+	protoTuples := []*aclpb.RelationTuple{}
+	for _, tuple := range tuples {
+		protoTuples = append(protoTuples, tuple.ToProto())
+	}
+
+	response := aclpb.ListRelationTuplesResponse{
+		RelationTuples: protoTuples,
+	}
+
+	return &response, nil
 }

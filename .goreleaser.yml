@@ -28,7 +28,7 @@ dockers:
     - "iam/access-controller:v{{ .Major }}.{{ .Minor }}"
     - "iam/access-controller:latest"
     - "iam/access-controller:zanzibar"
-    - "jonwhit/access-controller:zanzibar"
+    - "gcr.io/jon-whit/iam/access-controller:zanzibar"
     extra_files:
     - testdata
 checksum:

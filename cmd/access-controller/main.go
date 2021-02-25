@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,6 +22,9 @@ import (
 	"github.com/jon-whit/zanzibar-poc/access-controller/internal/datastores"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 var serverID = flag.String("id", uuid.New().String(), "A unique identifier for the server. Defaults to a new uuid.")
@@ -29,6 +33,7 @@ var advertise = flag.String("advertise", "", "The address that this node adverti
 var serverPort = flag.Int("p", 50052, "The bind port for the grpc server")
 var join = flag.String("join", "", "A comma-separated list of 'host:port' addresses for nodes in the cluster to join to")
 var insecure = flag.Bool("insecure", false, "Run in insecure mode (no tls)")
+var namespaceConfigPath = flag.String("namespace-config", "./testdata/namespace-configs", "The dir path to the namespace configurations")
 
 type hasher struct{}
 
@@ -40,14 +45,21 @@ func main() {
 
 	flag.Parse()
 
+	dsn := "postgresql://jonwhitaker@localhost:5432/postgres"
 	var pool *pgxpool.Pool
-	/*pool, err := pgxpool.Connect(context.TODO(), "postgresql://jonwhitaker@localhost:5432/postgres?pool_max_conns=20")
+	pool, err := pgxpool.Connect(context.TODO(), dsn)
 	if err != nil {
 		log.Fatalf("Failed to establish a connection to Postgres: %v", err)
-	}*/
+	}
+
+	gormDB, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Failed to initialize GORM database connection to Postgres: %v", err)
+	}
 
 	datastore := &datastores.SQLStore{
 		ConnPool: pool,
+		DB:       gormDB,
 	}
 
 	ring := consistent.New(nil, consistent.Config{
@@ -65,13 +77,6 @@ func main() {
 		},
 	}
 
-	go func() {
-		for {
-			time.Sleep(4 * time.Second)
-			fmt.Printf("checksum '%d', memberlist '%v'\n", node.Hashring.Checksum(), ring.GetMembers())
-		}
-	}()
-
 	memberlistConfig := memberlist.DefaultLANConfig()
 	memberlistConfig.Name = node.ID
 
@@ -88,7 +93,7 @@ func main() {
 	}
 	node.Memberlist = list
 
-	controller, err := accesscontroller.NewAccessController(pool, datastore, "./testdata/namespace-configs")
+	controller, err := accesscontroller.NewAccessController(datastore, *namespaceConfigPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize the Access Controller: %v", err)
 	}
@@ -122,11 +127,13 @@ func main() {
 	var opts []grpc.ServerOption
 	server := grpc.NewServer(opts...)
 	pb.RegisterCheckServiceServer(server, controller)
-	//pb.RegisterWriteServiceServer(server, controller)
-	//pb.RegisterReadServiceServer(server, controller)
+	pb.RegisterWriteServiceServer(server, controller)
+	pb.RegisterReadServiceServer(server, controller)
 	//pb.RegisterExpandServiceServer(server, controller)
 
 	go func() {
+		reflection.Register(server)
+
 		if err := server.Serve(listener); err != nil {
 			log.Fatalf("Failed to start the gRPC server: %v", err)
 		}
