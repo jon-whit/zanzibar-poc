@@ -415,7 +415,34 @@ LABEL:
 }
 
 func (a *AccessController) WriteRelationTuplesTxn(ctx context.Context, req *aclpb.WriteRelationTuplesTxnRequest) (*aclpb.WriteRelationTuplesTxnResponse, error) {
-	return nil, fmt.Errorf("Not Implemented")
+
+	inserts := []*InternalRelationTuple{}
+	deletes := []*InternalRelationTuple{}
+
+	for _, delta := range req.GetRelationTupleDeltas() {
+		action := delta.GetAction()
+		rt := delta.GetRelationTuple()
+
+		irt := InternalRelationTuple{
+			Namespace: rt.GetNamespace(),
+			Object:    rt.GetObject(),
+			Relation:  rt.GetRelation(),
+			Subject:   SubjectFromProto(rt.GetSubject()),
+		}
+
+		switch action {
+		case aclpb.RelationTupleDelta_INSERT:
+			inserts = append(inserts, &irt)
+		case aclpb.RelationTupleDelta_DELETE:
+			deletes = append(deletes, &irt)
+		}
+	}
+
+	if err := a.RelationTupleStore.TransactRelationTuples(ctx, inserts, deletes); err != nil {
+		return nil, err
+	}
+
+	return &aclpb.WriteRelationTuplesTxnResponse{}, nil
 }
 
 func (a *AccessController) ListRelationTuples(ctx context.Context, req *aclpb.ListRelationTuplesRequest) (*aclpb.ListRelationTuplesResponse, error) {

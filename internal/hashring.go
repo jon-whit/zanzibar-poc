@@ -18,25 +18,25 @@ type HashringMember interface {
 	String() string
 }
 
-// Hashring defines an interface to manage a consistent hash ring.
+// Hashring defines an interface to manage a consistent hashring.
 type Hashring interface {
 
-	// Add adds a new member to the hash ring.
+	// Add adds a new member to the hashring.
 	Add(member HashringMember)
 
-	// Remove removes a member from the hash ring.
+	// Remove removes a member from the hashring.
 	Remove(member HashringMember)
 
-	// LocateKey finds the home member for a given key.
+	// LocateKey finds the nearest hashring member for a given key.
 	LocateKey(key []byte) string
 
-	// Checksum computes the crc32 checksum of the Hashring.
+	// Checksum computes the CRC32 checksum of the Hashring.
 	//
 	// This can be used to compare the relative state of two
 	// hash rings on remote servers. If the checksum is the
 	// same, then the two members can trust their memberlist
 	// is identical. If not, then at some point in the future
-	// the cluster memberlist should converge and then the
+	// the hashring memberlist should converge and then the
 	// checksums will be identical.
 	Checksum() uint32
 }
@@ -56,24 +56,32 @@ type ConsistentHashring struct {
 	Ring *consistent.Consistent
 }
 
+// Add adds the provided hashring member to the hashring
+// memberlist.
 func (ch *ConsistentHashring) Add(member HashringMember) {
 	defer ch.rw.Unlock()
 	ch.rw.Lock()
 	ch.Ring.Add(consistent.Member(member))
 }
 
+// Remove removes the provided hashring member from the hashring
+// memberlist.
 func (ch *ConsistentHashring) Remove(member HashringMember) {
 	defer ch.rw.Unlock()
 	ch.rw.Lock()
 	ch.Ring.Remove(member.String())
 }
 
+// LocateKey locates the nearest hashring member to for the given
+// key.
 func (ch *ConsistentHashring) LocateKey(key []byte) string {
 	defer ch.rw.RUnlock()
 	ch.rw.RLock()
 	return ch.Ring.LocateKey(key).String()
 }
 
+// Checksum computes a consistent CRC32 checksum of the hashring
+// members using the IEEE polynomial.
 func (ch *ConsistentHashring) Checksum() uint32 {
 	defer ch.rw.RUnlock()
 	ch.rw.RLock()

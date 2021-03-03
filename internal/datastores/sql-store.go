@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
 	ac "github.com/jon-whit/zanzibar-poc/access-controller/internal"
@@ -64,7 +63,7 @@ func (s *SQLStore) Usersets(ctx context.Context, object ac.Object, relations ...
 	return usersets, nil
 }
 
-func (s *SQLStore) RowCount(ctx context.Context, query ac.RelationTupleQuery) (int, error) {
+func (s *SQLStore) RowCount(ctx context.Context, query ac.RelationTupleQuery) (int64, error) {
 
 	conn, err := s.ConnPool.Acquire(ctx)
 	if err != nil {
@@ -75,7 +74,6 @@ func (s *SQLStore) RowCount(ctx context.Context, query ac.RelationTupleQuery) (i
 	args := []interface{}{query.Object.ID, query.Relations, query.Subject.String()}
 	dbQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE object=$1 AND relation=any($2) AND "user"=$3`, query.Object.Namespace)
 
-	var count int
 	row := conn.QueryRow(ctx, dbQuery, args...)
 	if err := row.Scan(&count); err != nil {
 		return -1, err
@@ -134,35 +132,21 @@ func (s *SQLStore) ListRelationTuples(ctx context.Context, query *aclpb.ListRela
 	return tuples, nil
 }
 
-func (s *SQLStore) WriteRelationTupleDeltas(ctx context.Context, deltas []aclpb.RelationTupleDelta) error {
-	txn, err := s.ConnPool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
+func (s *SQLStore) TransactRelationTuples(ctx context.Context, tupleInserts []*ac.InternalRelationTuple, tupleDeletes []*ac.InternalRelationTuple) error {
 
-	b := pgx.Batch{}
-	for i := 0; i < len(deltas); i++ {
-		action := deltas[i].Action
-		tuple := deltas[i].GetRelationTuple()
-
-		switch action {
-		case aclpb.RelationTupleDelta_INSERT:
-			statement := fmt.Sprintf("INSERT INTO %s(object,relation,user) VALUES ($1,$2,$3)", tuple.GetNamespace())
-			_ = statement
-			//b.Queue(statement, tuple.GetObject(), tuple.GetRelation(), something)
-		case aclpb.RelationTupleDelta_DELETE:
-			statement := fmt.Sprintf("DELETE FROM %s WHERE object=$1 AND relation=$2 AND user=$3", tuple.GetNamespace())
-			_ = statement
-			//b.Queue(statement, tuple.GetObject(), tuple.GetRelation(), something)
+	return s.DB.WithContext(ctx).Transaction(func(txn *gorm.DB) error {
+		for _, tuple := range tupleInserts {
+			if err := txn.WithContext(ctx).Table(tuple.Namespace).Create(struct{}{}).Error; err != nil {
+				return err
+			}
 		}
-	}
 
-	batchResults := txn.SendBatch(ctx, &b)
-	batchResults.Close()
+		for _, tuple := range tupleDeletes {
+			if err := txn.WithContext(ctx).Table(tuple.Namespace).Delete(struct{}{}).Error; err != nil {
+				return err
+			}
+		}
 
-	if err := txn.Commit(ctx); err != nil {
-		return err
-	}
-
-	return nil
+		return nil
+	})
 }
