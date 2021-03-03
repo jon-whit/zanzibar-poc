@@ -7,6 +7,7 @@ go 1.15
 require (
 	github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72
 	github.com/cespare/xxhash v1.1.0
+	github.com/doug-martin/goqu/v9 v9.10.0
 	github.com/google/btree v1.0.0 // indirect
 	github.com/google/uuid v1.2.0
 	github.com/hashicorp/go-multierror v1.1.0
@@ -23,6 +24,4 @@ require (
 	google.golang.org/protobuf v1.25.0
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 	gopkg.in/yaml.v2 v2.4.0
-	gorm.io/driver/postgres v1.0.8
-	gorm.io/gorm v1.20.12
 )

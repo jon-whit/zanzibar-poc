@@ -2,19 +2,18 @@ package datastores
 
 import (
 	"context"
-	"fmt"
 	"time"
 
+	"github.com/doug-martin/goqu/v9"
+	_ "github.com/doug-martin/goqu/v9/dialect/postgres"
 	"github.com/jackc/pgx/v4/pgxpool"
 	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
 	ac "github.com/jon-whit/zanzibar-poc/access-controller/internal"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"gorm.io/gorm"
 )
 
 type SQLStore struct {
 	ConnPool *pgxpool.Pool
-	DB       *gorm.DB
 }
 
 func (s *SQLStore) Usersets(ctx context.Context, object ac.Object, relations ...string) ([]ac.Userset, error) {
@@ -22,16 +21,20 @@ func (s *SQLStore) Usersets(ctx context.Context, object ac.Object, relations ...
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	conn, err := s.ConnPool.Acquire(cctx)
+	sqlbuilder := goqu.Dialect("postgres").From(object.Namespace).Select("user").Where(
+		goqu.Ex{
+			"object":   object.ID,
+			"relation": relations,
+			"user":     goqu.Op{"like": "_%%:_%%#_%%"},
+		},
+	)
+
+	sql, args, err := sqlbuilder.ToSQL()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Release()
 
-	args := []interface{}{object.ID, relations}
-	query := fmt.Sprintf(`SELECT "user" FROM %s WHERE object=$1 AND relation=any($2) AND "user" LIKE '_%%:_%%#_%%'`, object.Namespace)
-
-	rows, err := conn.Query(context.TODO(), query, args...)
+	rows, err := s.ConnPool.Query(cctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,16 +68,22 @@ func (s *SQLStore) Usersets(ctx context.Context, object ac.Object, relations ...
 
 func (s *SQLStore) RowCount(ctx context.Context, query ac.RelationTupleQuery) (int64, error) {
 
-	conn, err := s.ConnPool.Acquire(ctx)
+	sqlbuilder := goqu.Dialect("postgres").From(query.Object.Namespace).Select(
+		goqu.COUNT("*"),
+	).Where(goqu.Ex{
+		"object":   query.Object.ID,
+		"relation": query.Relations,
+		"user":     query.Subject.String(),
+	})
+
+	sql, args, err := sqlbuilder.ToSQL()
 	if err != nil {
 		return -1, err
 	}
-	defer conn.Release()
 
-	args := []interface{}{query.Object.ID, query.Relations, query.Subject.String()}
-	dbQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE object=$1 AND relation=any($2) AND "user"=$3`, query.Object.Namespace)
+	row := s.ConnPool.QueryRow(ctx, sql, args...)
 
-	row := conn.QueryRow(ctx, dbQuery, args...)
+	var count int64
 	if err := row.Scan(&count); err != nil {
 		return -1, err
 	}
@@ -85,23 +94,35 @@ func (s *SQLStore) RowCount(ctx context.Context, query ac.RelationTupleQuery) (i
 func (s *SQLStore) ListRelationTuples(ctx context.Context, query *aclpb.ListRelationTuplesRequest_Query, mask *fieldmaskpb.FieldMask) ([]ac.InternalRelationTuple, error) {
 
 	// if len(mask.GetPaths()) > 0 {
-	// 	dbQuery.Select(mask.GetPaths())
+	// 	sqlbuilder.Select(mask.GetPaths())
 	// }
-	dbQuery := s.DB.Table(query.GetNamespace())
+
+	sqlbuilder := goqu.Dialect("postgres").From(query.GetNamespace()).Prepared(true)
 
 	if query.GetObject() != "" {
-		dbQuery.Where("object=?", query.GetObject())
+		sqlbuilder.Where(goqu.Ex{
+			"object": query.GetObject(),
+		})
 	}
 
 	if len(query.GetRelations()) > 0 {
-		dbQuery.Where("relation=?", query.GetRelations())
+		sqlbuilder.Where(goqu.Ex{
+			"relation": query.GetRelations(),
+		})
 	}
 
 	if query.GetSubject() != nil {
-		dbQuery.Where("user=?", query.GetSubject().String())
+		sqlbuilder.Where(goqu.Ex{
+			"user": query.GetSubject().String(),
+		})
 	}
 
-	rows, err := dbQuery.Rows()
+	sql, args, err := sqlbuilder.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.ConnPool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -125,28 +146,51 @@ func (s *SQLStore) ListRelationTuples(ctx context.Context, query *aclpb.ListRela
 			Subject:   subject,
 		})
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
+	rows.Close()
 
 	return tuples, nil
 }
 
 func (s *SQLStore) TransactRelationTuples(ctx context.Context, tupleInserts []*ac.InternalRelationTuple, tupleDeletes []*ac.InternalRelationTuple) error {
 
-	return s.DB.WithContext(ctx).Transaction(func(txn *gorm.DB) error {
-		for _, tuple := range tupleInserts {
-			if err := txn.WithContext(ctx).Table(tuple.Namespace).Create(struct{}{}).Error; err != nil {
-				return err
-			}
+	txn, err := s.ConnPool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, tuple := range tupleInserts {
+		sqlbuilder := goqu.Dialect("postgres").Insert(tuple.Namespace).Cols("object", "relation", "user").Vals(
+			goqu.Vals{tuple.Object, tuple.Relation, tuple.Subject.String()},
+		).OnConflict(goqu.DoNothing())
+
+		sql, args, err := sqlbuilder.ToSQL()
+		if err != nil {
+			return err
 		}
 
-		for _, tuple := range tupleDeletes {
-			if err := txn.WithContext(ctx).Table(tuple.Namespace).Delete(struct{}{}).Error; err != nil {
-				return err
-			}
+		_, err = txn.Exec(ctx, sql, args...)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, tuple := range tupleDeletes {
+		sqlbuilder := goqu.Dialect("postgres").Delete(tuple.Namespace).Where(goqu.Ex{
+			"object":   tuple.Object,
+			"relation": tuple.Relation,
+			"user":     tuple.Subject.String(),
+		})
+
+		sql, args, err := sqlbuilder.ToSQL()
+		if err != nil {
+			return err
 		}
 
-		return nil
-	})
+		_, err = txn.Exec(ctx, sql, args...)
+		if err != nil {
+			return err
+		}
+	}
+
+	return txn.Commit(ctx)
 }

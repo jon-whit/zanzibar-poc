@@ -23,8 +23,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 var serverID = flag.String("id", uuid.New().String(), "A unique identifier for the server. Defaults to a new uuid.")
@@ -52,14 +50,8 @@ func main() {
 		log.Fatalf("Failed to establish a connection to Postgres: %v", err)
 	}
 
-	gormDB, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Fatalf("Failed to initialize GORM database connection to Postgres: %v", err)
-	}
-
 	datastore := &datastores.SQLStore{
 		ConnPool: pool,
-		DB:       gormDB,
 	}
 
 	ring := consistent.New(nil, consistent.Config{
@@ -144,7 +136,7 @@ func main() {
 
 	<-exit
 
-	server.GracefulStop()
+	server.Stop()
 	if err := list.Leave(5 * time.Second); err != nil {
 		log.Error("Timed out waiting for this cluster member to leave the cluster..")
 	}
