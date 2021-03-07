@@ -172,6 +172,22 @@ func (s *SQLStore) TransactRelationTuples(ctx context.Context, tupleInserts []*a
 		if err != nil {
 			return err
 		}
+
+		sql, args, err = goqu.Dialect("postgres").Insert("changelog").Cols(
+			"namespace", "operation", "relationtuple", "timestamp",
+		).Vals(
+			goqu.Vals{tuple.Namespace, "INSERT", tuple.String(), goqu.L("NOW()")},
+		).OnConflict(
+			goqu.DoNothing(),
+		).ToSQL()
+		if err != nil {
+			return err
+		}
+
+		_, err = txn.Exec(ctx, sql, args...)
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, tuple := range tupleDeletes {
@@ -182,6 +198,22 @@ func (s *SQLStore) TransactRelationTuples(ctx context.Context, tupleInserts []*a
 		})
 
 		sql, args, err := sqlbuilder.ToSQL()
+		if err != nil {
+			return err
+		}
+
+		_, err = txn.Exec(ctx, sql, args...)
+		if err != nil {
+			return err
+		}
+
+		sql, args, err = goqu.Dialect("postgres").Insert("changelog").Cols(
+			"namespace", "operation", "relationtuple", "timestamp",
+		).Vals(
+			goqu.Vals{tuple.Namespace, "DELETE", tuple.String(), goqu.L("NOW()")},
+		).OnConflict(
+			goqu.DoNothing(),
+		).ToSQL()
 		if err != nil {
 			return err
 		}
