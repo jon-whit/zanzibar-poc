@@ -1,0 +1,43 @@
+project_name: access-controller
+
+before:
+  hooks:
+    - go mod download
+    - go generate ./...
+builds:
+  - main: ./cmd/access-controller/main.go
+    binary: bin/access-controller
+    env:
+      - CGO_ENABLED=0
+    goarch:
+      - amd64
+    goos:
+      - linux
+      - darwin
+archives:
+  - replacements:
+      darwin: Darwin
+      linux: Linux
+      386: i386
+      amd64: x86_64
+dockers:
+  -
+    image_templates:
+    - "iam/access-controller:{{ .Tag }}"
+    - "iam/access-controller:v{{ .Major }}"
+    - "iam/access-controller:v{{ .Major }}.{{ .Minor }}"
+    - "iam/access-controller:latest"
+    - "iam/access-controller:zanzibar"
+    - "gcr.io/jon-whit/iam/access-controller:zanzibar"
+    extra_files:
+    - testdata
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
