@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	pb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
+	pb "github.com/jon-whit/zanzibar-poc/access-controller/gen/go/iam/accesscontroller/v1alpha1"
 	"github.com/pkg/errors"
 )
 

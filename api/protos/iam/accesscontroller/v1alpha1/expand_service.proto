@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package iam.accesscontroller.v1alpha1;
+
+import "iam/accesscontroller/v1alpha1/acl.proto";
+
+option go_package = "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1;acl";
+
+service ExpandService {
+
+  // Expand performs an authorization check.
+  rpc Expand(ExpandRequest) returns (ExpandResponse);
+}
+
+// The request for a ExpandService.Expand rpc.
+message ExpandRequest {
+
+  SubjectSet subject_set = 1;
+}
+
+message ExpandResponse {
+
+  // The tree the requested subject set expands to.
+  // The requested subject set is the subject of the root.
+  //
+  // This field can be nil in some circumstances.
+  SubjectTree tree = 1;
+}
+
+enum NodeType {
+
+  NODE_TYPE_UNSPECIFIED = 0;
+
+  // This node expands to a union of all children.
+  NODE_TYPE_UNION = 1;
+
+  // Not implemented yet.
+  NODE_TYPE_EXCLUSION = 2;
+
+  // Not implemented yet.
+  NODE_TYPE_INTERSECTION = 3;
+
+  // This node is a leaf and contains no children.
+  // Its subject is a `SubjectID` unless `max_depth` was reached.
+  NODE_TYPE_LEAF = 4;
+}
+
+message SubjectTree {
+
+  // The type of the node.
+  NodeType node_type = 1;
+
+  // The subject this node represents.
+  Subject subject = 2;
+
+  // The children of this node.
+  //
+  // This is unset if `node_type` is `NODE_TYPE_LEAF`.
+  repeated SubjectTree children = 3;
+}

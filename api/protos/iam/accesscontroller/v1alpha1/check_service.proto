@@ -2,7 +2,8 @@ syntax = "proto3";
 
 package iam.accesscontroller.v1alpha1;
 
-import "acl.proto";
+import "iam/accesscontroller/v1alpha1/acl.proto";
+import "google/api/annotations.proto";
 
 option go_package = "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1;acl";
 
@@ -11,7 +12,11 @@ option go_package = "github.com/jon-whit/zanzibar-poc/access-controller/api/prot
 service CheckService {
 
   // Check performs an authorization check.
-  rpc Check(CheckRequest) returns (CheckResponse);
+  rpc Check(CheckRequest) returns (CheckResponse) {
+    option (google.api.http) = {
+      get: "/iam/access-controller/v1alpha1/check"
+    };
+  }
 }
 
 // The request for a CheckService.Check rpc.

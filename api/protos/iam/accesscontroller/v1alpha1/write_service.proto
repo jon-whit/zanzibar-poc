@@ -3,6 +3,7 @@ syntax = "proto3";
 package iam.accesscontroller.v1alpha1;
 
 import "iam/accesscontroller/v1alpha1/acl.proto";
+import "google/api/annotations.proto";
 
 option go_package = "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1;acl";
 
@@ -10,7 +11,12 @@ option go_package = "github.com/jon-whit/zanzibar-poc/access-controller/api/prot
 service WriteService {
 
   // Writes one or more relation tuples in a single transaction.
-  rpc WriteRelationTuplesTxn(WriteRelationTuplesTxnRequest) returns (WriteRelationTuplesTxnResponse);
+  rpc WriteRelationTuplesTxn(WriteRelationTuplesTxnRequest) returns (WriteRelationTuplesTxnResponse) {
+    option (google.api.http) = {
+      post: "/iam/access-controller/v1alpha1/write",
+      body: "*"
+    };
+  }
 }
 
 // The request of a WriteService.WriteRelationTuplesTxn rpc.

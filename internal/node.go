@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/hashicorp/memberlist"
-	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
+	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/gen/go/iam/accesscontroller/v1alpha1"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -33,7 +33,7 @@ type NodeMetadata struct {
 // The `member` argument must not be modified.
 func (n *Node) NotifyJoin(member *memberlist.Node) {
 
-	log.Infof("A new cluster member '%s' joined the cluster with address '%s'", member.String(), member.FullAddress().Addr)
+	log.Infof("Cluster member with id '%s' joined the cluster at address '%s'", member.String(), member.FullAddress().Addr)
 
 	nodeID := member.String()
 	if nodeID != n.ID {
@@ -51,7 +51,7 @@ func (n *Node) NotifyJoin(member *memberlist.Node) {
 		conn, err := grpc.Dial(remoteAddr, opts...)
 		if err != nil {
 			// todo: handle error better
-			log.Errorf("Failed to establish a grpc client connection to cluster member '%s' at address '%s'", nodeID, remoteAddr)
+			log.Errorf("Failed to establish a grpc connection to cluster member '%s' at address '%s'", nodeID, remoteAddr)
 			return
 		}
 
@@ -61,14 +61,14 @@ func (n *Node) NotifyJoin(member *memberlist.Node) {
 	}
 
 	n.Hashring.Add(member)
-	log.Infof("hashring checksum: %d", n.Hashring.Checksum())
+	log.Tracef("hashring checksum: %d", n.Hashring.Checksum())
 }
 
 // NotifyLeave is invoked when a node leaves the cluster. The
 // `member` argument must not be modified.
 func (n *Node) NotifyLeave(member *memberlist.Node) {
 
-	log.Infof("A cluster member '%v' at address '%v' left the cluster", member.String(), member.FullAddress().Addr)
+	log.Infof("Cluster member with id '%v' at address '%v' left the cluster", member.String(), member.FullAddress().Addr)
 
 	nodeID := member.String()
 	if nodeID != n.ID {
@@ -76,7 +76,7 @@ func (n *Node) NotifyLeave(member *memberlist.Node) {
 	}
 
 	n.Hashring.Remove(member)
-	log.Infof("hashring checksum: %d", n.Hashring.Checksum())
+	log.Tracef("hashring checksum: %d", n.Hashring.Checksum())
 }
 
 // NotifyUpdate is invoked when a node in the cluster is updated,

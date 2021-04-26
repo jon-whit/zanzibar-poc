@@ -7,7 +7,8 @@ import (
 	"github.com/doug-martin/goqu/v9"
 	_ "github.com/doug-martin/goqu/v9/dialect/postgres"
 	"github.com/jackc/pgx/v4/pgxpool"
-	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
+
+	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/gen/go/iam/accesscontroller/v1alpha1"
 	ac "github.com/jon-whit/zanzibar-poc/access-controller/internal"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -100,19 +101,19 @@ func (s *SQLStore) ListRelationTuples(ctx context.Context, query *aclpb.ListRela
 	sqlbuilder := goqu.Dialect("postgres").From(query.GetNamespace()).Prepared(true)
 
 	if query.GetObject() != "" {
-		sqlbuilder.Where(goqu.Ex{
+		sqlbuilder = sqlbuilder.Where(goqu.Ex{
 			"object": query.GetObject(),
 		})
 	}
 
 	if len(query.GetRelations()) > 0 {
-		sqlbuilder.Where(goqu.Ex{
+		sqlbuilder = sqlbuilder.Where(goqu.Ex{
 			"relation": query.GetRelations(),
 		})
 	}
 
 	if query.GetSubject() != nil {
-		sqlbuilder.Where(goqu.Ex{
+		sqlbuilder = sqlbuilder.Where(goqu.Ex{
 			"user": query.GetSubject().String(),
 		})
 	}

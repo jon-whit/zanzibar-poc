@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	ac "github.com/jon-whit/zanzibar-poc/access-controller/internal"
-	"github.com/xeipuuv/gojsonschema"
 	"gopkg.in/yaml.v2"
 )
 
@@ -28,9 +27,6 @@ func NewNamespaceManager(path string) (ac.NamespaceManager, error) {
 	if path == "" {
 		return nil, fmt.Errorf("An empty path must not be provided")
 	}
-
-	// todo: grab this more dynamically
-	schemaLoader := gojsonschema.NewReferenceLoader("file:///Users/Jonathan/github/jon-whit/zanzibar-poc/api/schemas.json/namespace-config.json")
 
 	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
 		if info.IsDir() {
@@ -56,25 +52,6 @@ func NewNamespaceManager(path string) (ac.NamespaceManager, error) {
 		err = yaml.Unmarshal(blob, &config)
 		if err != nil {
 			return err
-		}
-
-		documentLoader := gojsonschema.NewGoLoader(config)
-
-		result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-		if err != nil {
-			// todo: handle this error case better
-			panic(err.Error())
-		}
-
-		if !result.Valid() {
-			fmt.Printf("The document is not valid. see errors :\n")
-
-			for _, desc := range result.Errors() {
-				fmt.Printf("- %s\n", desc)
-			}
-
-			// todo: handle this error better with wrapped errors
-			panic(fmt.Sprintf("The '%s' namespace config is not a valid namespace config specification", config.Name))
 		}
 
 		namespace := config.Name

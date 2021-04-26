@@ -3,7 +3,7 @@ package accesscontroller
 import (
 	"context"
 
-	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
+	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/gen/go/iam/accesscontroller/v1alpha1"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
