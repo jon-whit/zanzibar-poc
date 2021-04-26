@@ -96,3 +96,13 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+postgres:
+  host: localhost
+  port: 5432
+  database: postgres
+  username: postgres
+  credentials:
+    secret: postgres-creds
+    usernameKey: username
+    passwordKey: password

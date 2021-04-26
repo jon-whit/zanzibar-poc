@@ -4,6 +4,7 @@ package iam.accesscontroller.v1alpha1;
 
 import "iam/accesscontroller/v1alpha1/acl.proto";
 import "google/protobuf/field_mask.proto";
+import "google/api/annotations.proto";
 
 option go_package = "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1;acl";
 
@@ -11,7 +12,11 @@ option go_package = "github.com/jon-whit/zanzibar-poc/access-controller/api/prot
 service ReadService {
 
     // Lists ACL relation tuples.
-    rpc ListRelationTuples(ListRelationTuplesRequest) returns (ListRelationTuplesResponse);
+    rpc ListRelationTuples(ListRelationTuplesRequest) returns (ListRelationTuplesResponse) {
+        option (google.api.http) = {
+            get: "/iam/access-controller/v1alpha1/tuples"
+        };
+    }
 }
 
 message ListRelationTuplesRequest {

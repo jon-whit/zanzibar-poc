@@ -5,13 +5,18 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/google/uuid"
+	gwruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/jackc/pgx/v4/pgxpool"
-	pb "github.com/jon-whit/zanzibar-poc/access-controller/api/protos/iam/accesscontroller/v1alpha1"
+	"github.com/spf13/viper"
+
+	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/gen/go/iam/accesscontroller/v1alpha1"
 	ac "github.com/jon-whit/zanzibar-poc/access-controller/internal"
 	"github.com/jon-whit/zanzibar-poc/access-controller/internal/datastores"
 	"github.com/jon-whit/zanzibar-poc/access-controller/internal/namespace-manager/inmem"
@@ -20,19 +25,55 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 var serverID = flag.String("id", uuid.New().String(), "A unique identifier for the server. Defaults to a new uuid.")
 var nodePort = flag.Int("node-port", 7946, "The bind port for the cluster node")
 var advertise = flag.String("advertise", "", "The address that this node advertises on within the cluster")
 var serverPort = flag.Int("p", 50052, "The bind port for the grpc server")
 var join = flag.String("join", "", "A comma-separated list of 'host:port' addresses for nodes in the cluster to join to")
 var insecure = flag.Bool("insecure", false, "Run in insecure mode (no tls)")
-var namespaceConfigPath = flag.String("namespace-config", "/Users/Jonathan/github/jon-whit/zanzibar-poc/testdata/namespace-configs", "The path to the namespace configurations")
+var namespaceConfigPath = flag.String("namespace-config", "./testdata/namespace-configs", "The path to the namespace configurations")
+var configPath = flag.String("config", "./localconfig/config.yaml", "The path to the server config")
+
+type Config struct {
+	Postgres struct {
+		Host     string `yaml:"host" json:"host"`
+		Port     int    `yaml:"port" json:"port"`
+		Database string `yaml:"database" json:"database"`
+	} `yaml:"postgres" json:"postgres"`
+}
 
 func main() {
 
 	flag.Parse()
 
-	dsn := "postgresql://jonwhitaker@localhost:5432/postgres"
+	viper.SetConfigFile(*configPath)
+	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err != nil {
+		log.Fatalf("Failed to load server config file: %v", err)
+	}
+
+	var cfg Config
+	if err := viper.Unmarshal(&cfg); err != nil {
+		log.Fatalf("Failed to Unmarshal server config: %v", err)
+	}
+
+	pgUsername := viper.GetString("POSTGRES_USERNAME")
+	pgPassword := viper.GetString("POSTGRES_PASSWORD")
+	dsn := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s",
+		pgUsername,
+		pgPassword,
+		cfg.Postgres.Host,
+		cfg.Postgres.Port,
+		cfg.Postgres.Database,
+	)
+
 	pool, err := pgxpool.Connect(context.TODO(), dsn)
 	if err != nil {
 		log.Fatalf("Failed to establish a connection to Postgres database: %v", err)
@@ -47,6 +88,12 @@ func main() {
 		log.Fatalf("Failed to initialize in-memory NamespaceManager: %v", err)
 	}
 
+	log.Info("Starting access-controller")
+	log.Infof("  Version: %s", version)
+	log.Infof("  Date: %s", date)
+	log.Infof("  Commit: %s", commit)
+	log.Infof("  Go version: %s", runtime.Version())
+
 	ctrlOpts := []ac.AccessControllerOption{
 		ac.WithStore(datastore),
 		ac.WithNamespaceManager(m),
@@ -60,27 +107,63 @@ func main() {
 	}
 	controller, err := ac.NewAccessController(ctrlOpts...)
 	if err != nil {
-		log.Fatalf("Failed to initialize the Access Controller: %v", err)
+		log.Fatalf("Failed to initialize the access-controller: %v", err)
 	}
 
 	addr := fmt.Sprintf(":%d", *serverPort)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("Failed to start the TCP listener for '%v': %v", addr, err)
+		log.Fatalf("Failed to start the TCP listener on '%v': %v", addr, err)
 	}
 
 	grpcOpts := []grpc.ServerOption{}
 	server := grpc.NewServer(grpcOpts...)
-	pb.RegisterCheckServiceServer(server, controller)
-	pb.RegisterWriteServiceServer(server, controller)
-	pb.RegisterReadServiceServer(server, controller)
-	//pb.RegisterExpandServiceServer(server, controller)
+	aclpb.RegisterCheckServiceServer(server, controller)
+	aclpb.RegisterWriteServiceServer(server, controller)
+	aclpb.RegisterReadServiceServer(server, controller)
 
 	go func() {
 		reflection.Register(server)
 
+		log.Infof("Starting grpc server at '%v'..", addr)
+
 		if err := server.Serve(listener); err != nil {
 			log.Fatalf("Failed to start the gRPC server: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Register gRPC server endpoint
+	// Note: Make sure the gRPC server is running properly and accessible
+	mux := gwruntime.NewServeMux()
+
+	opts := []grpc.DialOption{grpc.WithInsecure()}
+
+	if err := aclpb.RegisterCheckServiceHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+		log.Fatalf("Failed to initialize grpc-gateway CheckService handler: %v", err)
+	}
+
+	if err := aclpb.RegisterWriteServiceHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+		log.Fatalf("Failed to initialize grpc-gateway WriteService handler: %v", err)
+	}
+
+	if err := aclpb.RegisterReadServiceHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+		log.Fatalf("Failed to initialize grpc-gateway ReadService handler: %v", err)
+	}
+
+	gateway := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	go func() {
+		log.Infof("Starting grpc-gateway server at '%v'..", gateway.Addr)
+
+		// Start HTTP server (and proxy calls to gRPC server endpoint)
+		if err := gateway.ListenAndServe(); err != http.ErrServerClosed {
+			log.Fatalf("Failed to start grpc-gateway HTTP server: %v", err)
 		}
 	}()
 
@@ -89,10 +172,16 @@ func main() {
 
 	<-exit
 
-	server.Stop()
-	if err := controller.Close(); err != nil {
-		log.Errorf("Failed to gracefully close AccessController: %v", err)
+	log.Info("Shutting Down..")
+
+	if err := gateway.Shutdown(ctx); err != nil {
+		log.Errorf("Failed to gracefully shutdown the grpc-gateway server: %v", err)
 	}
 
-	log.Info("Server Shutdown..")
+	server.Stop()
+	if err := controller.Close(); err != nil {
+		log.Errorf("Failed to gracefully close the access-controller: %v", err)
+	}
+
+	log.Info("Shutdown Complete. Goodbye 👋")
 }
