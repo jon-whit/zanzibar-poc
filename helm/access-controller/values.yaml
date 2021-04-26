@@ -60,6 +60,8 @@ service:
       port: 50052
     gossip:
       port: 7946
+    grpcGateway:
+      port: 8082
 
 ingress:
   enabled: false
@@ -96,6 +98,9 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+grpcGateway:
+  enabled: false
 
 postgres:
   host: localhost

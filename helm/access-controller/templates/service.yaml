@@ -31,5 +31,11 @@ spec:
       targetPort: grpc
       protocol: TCP
       name: grpc
+    {{- if .Values.grpcGateway.enabled }}
+    - port: {{ .Values.service.ports.grpcGateway.port }}
+      targetPort: grpc-gateway
+      protocol: TCP
+      name: grpc-gateway
+    {{- end }}
   selector:
     {{- include "access-controller.selectorLabels" . | nindent 4 }}

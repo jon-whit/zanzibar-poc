@@ -6,6 +6,8 @@ metadata:
     {{- include "access-controller.labels" . | nindent 4 }}
 data:
   config.yaml: |
+    grpcGateway:
+      enabled: {{ .Values.grpcGateway.enabled }}
     postgres:
       host: {{ .Values.postgres.host }}
       port: {{ .Values.postgres.port }}

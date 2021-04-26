@@ -78,6 +78,11 @@ spec:
             - containerPort: {{ .Values.service.ports.grpc.port }}
               protocol: TCP
               name: grpc
+            {{- if .Values.grpcGateway.enabled }}
+            - containerPort: {{ .Values.service.ports.grpcGateway.port }}
+              protocol: TCP
+              name: grpc-gateway
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
