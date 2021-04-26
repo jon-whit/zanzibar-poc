@@ -27,9 +27,9 @@ Start a multi-node cluster by starting multiple independent servers and use the 
 to join the node to an existing cluster.
 
 ```bash
-$ ./access-controller --node-port 7946 -p 50052
-$ ./access-controller --node-port 7947 -p 50053 --join 127.0.0.1:7946
-$ ./access-controller --node-port 7948 -p 50054 --join 127.0.0.1:7947
+$ ./access-controller --node-port 7946 --grpc-port 50052
+$ ./access-controller --node-port 7947 --grpc-port 50053 --join 127.0.0.1:7946
+$ ./access-controller --node-port 7948 --grpc-port 50054 --join 127.0.0.1:7947
 ```
 
 ### Kubernetes
