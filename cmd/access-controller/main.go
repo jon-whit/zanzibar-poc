@@ -127,6 +127,7 @@ func main() {
 	aclpb.RegisterCheckServiceServer(server, controller)
 	aclpb.RegisterWriteServiceServer(server, controller)
 	aclpb.RegisterReadServiceServer(server, controller)
+	aclpb.RegisterExpandServiceServer(server, controller)
 
 	go func() {
 		reflection.Register(server)

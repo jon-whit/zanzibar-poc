@@ -16,6 +16,17 @@ type RewriteRule struct {
 	Children []*RewriteRule
 }
 
+func (r RewriteOperator) ToTreeNodeType() NodeType {
+	switch r {
+	case Intersection:
+		return IntersectionNode
+	case Union:
+		return UnionNode
+	default:
+		panic("An unexpected RewriteRule operator was encountered. Underlying invariants weren't met.")
+	}
+}
+
 type ThisRelation struct {
 	Relation string
 }

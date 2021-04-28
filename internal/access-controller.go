@@ -16,12 +16,14 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 type AccessController struct {
 	aclpb.UnimplementedCheckServiceServer
 	aclpb.UnimplementedWriteServiceServer
 	aclpb.UnimplementedReadServiceServer
+	aclpb.UnimplementedExpandServiceServer
 
 	*Node
 	RelationTupleStore
@@ -371,6 +373,152 @@ EVAL:
 	return a.checkRewrite(ctx, rewrite, namespace, object, user)
 }
 
+func (a *AccessController) expandWithRewrite(ctx context.Context, rewrite *RewriteRule, tree *Tree, namespace, object, relation string, depth uint) (*Tree, error) {
+
+	op := rewrite.Operator
+	if op == Intersection || op == Union {
+		tree.Type = op.ToTreeNodeType()
+
+		for _, child := range rewrite.Children {
+
+			subTree := tree
+			if child.Operator == Intersection || child.Operator == Union {
+				subTree = &Tree{
+					Type:    child.Operator.ToTreeNodeType(),
+					Subject: tree.Subject,
+				}
+			}
+
+			_, err := a.expandWithRewrite(ctx, child, subTree, namespace, object, relation, depth)
+			if err != nil {
+				return nil, err
+			}
+
+			if child.Operator == Intersection || child.Operator == Union {
+				tree.Children = append(tree.Children, subTree)
+			}
+		}
+
+		return tree, nil
+	}
+
+	// Easiest way to avoid this conditional is to rework the rewrites so that _this{}, computed_userset{}, or tuple_to_userset{} with no rewrites
+	// is equivalent to:
+	// union { child { _this{} } }
+	// union { child { computed_userset{ ... } } }
+	// union { child { tuple_to_userset{ ... } } }
+	//
+	// This way the conditionals above would set the tree's node type.
+	if tree.Type == "" {
+		tree.Type = UnionNode
+	}
+
+	// otherwise we're dealing with _this:{}, computed_userset{}, or tuple_to_userset{}
+	switch r := rewrite.Operand.(type) {
+	case ThisRelation:
+		tuples, err := a.RelationTupleStore.ListRelationTuples(ctx, &aclpb.ListRelationTuplesRequest_Query{
+			Namespace: namespace,
+			Object:    object,
+			Relations: []string{relation},
+		}, &fieldmaskpb.FieldMask{})
+		if err != nil {
+			return nil, err
+		}
+
+		for _, tuple := range tuples {
+			subject := tuple.Subject
+
+			if ss, isSubjectSet := subject.(*SubjectSet); isSubjectSet {
+
+				rr := ss.Relation
+				if rr == "..." {
+					rr = relation
+				}
+				t, err := a.expand(ctx, ss.Namespace, ss.Object, rr, depth)
+				if err != nil {
+					return nil, err
+				}
+
+				tree.Children = append(tree.Children, t)
+			} else {
+				tree.Children = append(tree.Children, &Tree{
+					Type:    LeafNode,
+					Subject: subject,
+				})
+			}
+		}
+	case ComputedUserset:
+		t, err := a.expand(ctx, namespace, object, r.Relation, depth)
+		if err != nil {
+			return nil, err
+		}
+
+		tree.Children = append(tree.Children, t)
+	case TupleToUserset:
+
+		rr := r.Tupleset.Relation
+		if rr == "..." {
+			rr = relation
+		}
+
+		tuples, err := a.RelationTupleStore.ListRelationTuples(ctx, &aclpb.ListRelationTuplesRequest_Query{
+			Namespace: namespace,
+			Object:    object,
+			Relations: []string{rr},
+		}, &fieldmaskpb.FieldMask{})
+		if err != nil {
+			return nil, err
+		}
+
+		for _, tuple := range tuples {
+			subject := tuple.Subject
+
+			if ss, isSubjectSet := subject.(*SubjectSet); isSubjectSet {
+
+				rr := ss.Relation
+				if rr == "..." {
+					rr = relation
+				}
+				t, err := a.expand(ctx, ss.Namespace, ss.Object, rr, depth)
+				if err != nil {
+					return nil, err
+				}
+
+				tree.Children = append(tree.Children, t)
+			} else {
+				tree.Children = append(tree.Children, &Tree{
+					Type:    LeafNode,
+					Subject: subject,
+				})
+			}
+		}
+	}
+
+	return tree, nil
+}
+
+func (a *AccessController) expand(ctx context.Context, namespace, object, relation string, depth uint) (*Tree, error) {
+
+	rewrite, err := a.NamespaceManager.GetRewriteRule(ctx, namespace, relation)
+	if err != nil {
+		return nil, err
+	}
+
+	if rewrite == nil {
+		message := fmt.Sprintf("No namespace configuration for relation '%s#%s' exists", namespace, relation)
+		return nil, status.Error(codes.InvalidArgument, message)
+	}
+
+	tree := &Tree{
+		Subject: &SubjectSet{
+			Namespace: namespace,
+			Object:    object,
+			Relation:  relation,
+		},
+	}
+	return a.expandWithRewrite(ctx, rewrite, tree, namespace, object, relation, depth)
+}
+
 func (a *AccessController) Check(ctx context.Context, req *aclpb.CheckRequest) (*aclpb.CheckResponse, error) {
 	subject := SubjectFromProto(req.GetSubject())
 
@@ -434,6 +582,25 @@ func (a *AccessController) ListRelationTuples(ctx context.Context, req *aclpb.Li
 	}
 
 	return &response, nil
+}
+
+func (a *AccessController) Expand(ctx context.Context, req *aclpb.ExpandRequest) (*aclpb.ExpandResponse, error) {
+
+	subject := req.GetSubjectSet()
+	namespace := subject.GetNamespace()
+	object := subject.GetObject()
+	relation := subject.GetRelation()
+
+	tree, err := a.expand(ctx, namespace, object, relation, 100)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &aclpb.ExpandResponse{
+		Tree: tree.ToProto(),
+	}
+
+	return resp, nil
 }
 
 func (a *AccessController) Close() error {
