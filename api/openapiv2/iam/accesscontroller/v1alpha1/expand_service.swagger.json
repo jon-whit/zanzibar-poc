@@ -54,19 +54,19 @@
           "$ref": "#/definitions/v1alpha1SubjectTree",
           "description": "The tree the requested subject set expands to.\nThe requested subject set is the subject of the root.\n\nThis field can be nil in some circumstances."
         }
-      }
+      },
+      "description": "The response for an ExpandService.Expand rpc."
     },
     "v1alpha1NodeType": {
       "type": "string",
       "enum": [
         "NODE_TYPE_UNSPECIFIED",
         "NODE_TYPE_UNION",
-        "NODE_TYPE_EXCLUSION",
         "NODE_TYPE_INTERSECTION",
         "NODE_TYPE_LEAF"
       ],
       "default": "NODE_TYPE_UNSPECIFIED",
-      "description": " - NODE_TYPE_UNION: This node expands to a union of all children.\n - NODE_TYPE_EXCLUSION: Not implemented yet.\n - NODE_TYPE_INTERSECTION: Not implemented yet.\n - NODE_TYPE_LEAF: This node is a leaf and contains no children.\nIts subject is a `SubjectID` unless `max_depth` was reached."
+      "description": " - NODE_TYPE_UNION: This node expands to a union of all children.\n - NODE_TYPE_INTERSECTION: This node expands to an intersection of the children.\n - NODE_TYPE_LEAF: This node is a leaf and contains no children.\nIts subject is a `SubjectID` unless `max_depth` was reached."
     },
     "v1alpha1Subject": {
       "type": "object",
