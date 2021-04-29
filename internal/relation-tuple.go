@@ -27,20 +27,6 @@ func (u Userset) String() string {
 	return fmt.Sprintf("%s:%s#%s", u.Object.Namespace, u.Object.ID, u.Relation)
 }
 
-// User can be either an Userset or an UserID
-type User struct {
-	Userset Userset
-	UserID  string
-}
-
-// RelationTuple is a relation between an user and an object
-// `group:eng#member@11``
-type RelationTuple struct {
-	Object   Object
-	Relation string
-	User     User
-}
-
 type Subject interface {
 	json.Marshaler
 
@@ -206,52 +192,6 @@ func SubjectFromProto(sub *pb.Subject) Subject {
 	}
 
 	return nil
-}
-
-type RewriteOperand struct {
-	ThisRelation *struct{} `yaml:"_this,omitempty" json:"_this,omitempty"`
-
-	ComputedUserset *struct {
-		Relation string `yaml:"relation" json:"relation"`
-	} `yaml:"computed_userset,omitempty" json:"computed_userset,omitempty"`
-
-	TupleToUserset *struct {
-		Tupleset struct {
-			Relation string `yaml:"relation" json:"relation"`
-		} `yaml:"tupleset" json:"tupleset"`
-
-		ComputedUserset struct {
-			Relation string `yaml:"relation" json:"relation"`
-		} `yaml:"computed_userset" json:"computed_userset"`
-	} `yaml:"tuple_to_userset,omitempty" json:"tuple_to_userset,omitempty"`
-
-	Union []RewriteOperand `yaml:"union,omitempty" json:"union,omitempty"`
-
-	Intersection []RewriteOperand `yaml:"intersection,omitempty" json:"intersection,omitempty"`
-}
-
-type UsersetRewrite struct {
-	RewriteOperand
-}
-
-type NamespaceRelation struct {
-
-	// Name is the name of the relation.
-	Name string `yaml:"name" json:"name"`
-
-	// UsersetRewrite is a linked-list of of rewrite operands that
-	// define how this relation is related to other relations.
-	UsersetRewrite *RewriteOperand `yaml:"rewrite,omitempty" json:"rewrite,omitempty"`
-}
-
-type NamespaceConfig struct {
-
-	// Name is the name of the namespace.
-	Name string `yaml:"name" json:"name"`
-
-	// Relations are a required list of relations that apply to the
-	// namespace.
-	Relations []NamespaceRelation `yaml:"relations" json:"relations"`
 }
 
 type RelationTupleQuery struct {

@@ -128,6 +128,7 @@ func main() {
 	aclpb.RegisterWriteServiceServer(server, controller)
 	aclpb.RegisterReadServiceServer(server, controller)
 	aclpb.RegisterExpandServiceServer(server, controller)
+	aclpb.RegisterNamespaceConfigServiceServer(server, controller)
 
 	go func() {
 		reflection.Register(server)
@@ -160,6 +161,10 @@ func main() {
 
 		if err := aclpb.RegisterReadServiceHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
 			log.Fatalf("Failed to initialize grpc-gateway ReadService handler: %v", err)
+		}
+
+		if err := aclpb.RegisterNamespaceConfigServiceHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+			log.Fatalf("Failed to initialize grpc-gateway NamespaceConfig handler: %v", err)
 		}
 
 		gateway = &http.Server{

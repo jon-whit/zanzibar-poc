@@ -8,21 +8,22 @@ import (
 	"path/filepath"
 	"strings"
 
+	aclpb "github.com/jon-whit/zanzibar-poc/access-controller/gen/go/iam/accesscontroller/v1alpha1"
 	ac "github.com/jon-whit/zanzibar-poc/access-controller/internal"
-	"gopkg.in/yaml.v2"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
-const configExt = "yaml"
+const configExt = "json"
 
 type inmemNamespaceManager struct {
-	configs  map[string]*ac.NamespaceConfig
-	rewrites map[string]*ac.RewriteRule
+	configs  map[string]*aclpb.NamespaceConfig
+	rewrites map[string]*aclpb.Rewrite
 }
 
 func NewNamespaceManager(path string) (ac.NamespaceManager, error) {
 
-	configs := make(map[string]*ac.NamespaceConfig)
-	rewrites := make(map[string]*ac.RewriteRule)
+	configs := make(map[string]*aclpb.NamespaceConfig)
+	rewrites := make(map[string]*aclpb.Rewrite)
 
 	if path == "" {
 		return nil, fmt.Errorf("An empty path must not be provided")
@@ -48,26 +49,31 @@ func NewNamespaceManager(path string) (ac.NamespaceManager, error) {
 			return err
 		}
 
-		var config ac.NamespaceConfig
-		err = yaml.Unmarshal(blob, &config)
+		var config aclpb.NamespaceConfig
+		err = protojson.Unmarshal(blob, &config)
 		if err != nil {
 			return err
 		}
 
-		namespace := config.Name
+		namespace := config.GetName()
 		configs[namespace] = &config
 
-		for _, relation := range config.Relations {
-			var rule ac.RewriteRule
+		for _, relation := range config.GetRelations() {
+			rewrite := relation.GetRewrite()
 
-			if relation.UsersetRewrite != nil {
-				rule = ac.ExpandRewriteOperand(relation.Name, relation.UsersetRewrite)
-			} else {
-				// A relation with no rewrites references itself
-				rule = ac.RewriteRule{Operand: ac.ThisRelation{Relation: relation.Name}}
+			if rewrite == nil {
+				rewrite = &aclpb.Rewrite{
+					RewriteOperation: &aclpb.Rewrite_Union{
+						Union: &aclpb.SetOperation{
+							Children: []*aclpb.SetOperation_Child{
+								{ChildType: &aclpb.SetOperation_Child_XThis{}},
+							},
+						},
+					},
+				}
 			}
 
-			rewrites[namespace+"#"+relation.Name] = &rule
+			rewrites[namespace+"#"+relation.GetName()] = rewrite
 		}
 
 		return nil
@@ -84,23 +90,48 @@ func NewNamespaceManager(path string) (ac.NamespaceManager, error) {
 
 }
 
-func (i *inmemNamespaceManager) GetRewriteRule(ctx context.Context, namespace, relation string) (*ac.RewriteRule, error) {
+func (i *inmemNamespaceManager) WriteConfig(ctx context.Context, cfg *aclpb.NamespaceConfig) error {
+
+	namespace := cfg.GetName()
+	i.configs[namespace] = cfg
+
+	for _, relation := range cfg.GetRelations() {
+		key := fmt.Sprintf("%s#%s", namespace, relation.GetName())
+		i.rewrites[key] = relation.GetRewrite()
+	}
+
+	return nil
+}
+
+func (i *inmemNamespaceManager) GetConfig(ctx context.Context, namespace string) (*aclpb.NamespaceConfig, error) {
+
+	config, ok := i.configs[namespace]
+	if !ok {
+		return nil, fmt.Errorf("No namespace configs found for namespace '%s'", namespace)
+	}
+
+	return config, nil
+}
+
+func (i *inmemNamespaceManager) GetRewrite(ctx context.Context, namespace, relation string) (*aclpb.Rewrite, error) {
 
 	key := fmt.Sprintf("%s#%s", namespace, relation)
 	rewrite, ok := i.rewrites[key]
-	if ok {
-		return rewrite, nil
+	if !ok {
+		return nil, fmt.Errorf("No rewrite was found for the namespace '%s' and relation '%s'", namespace, relation)
 	}
 
-	return nil, nil
-}
-
-func (i *inmemNamespaceManager) GetNamespaceConfig(ctx context.Context, namespace string) (*ac.NamespaceConfig, error) {
-
-	config, ok := i.configs[namespace]
-	if ok {
-		return config, nil
+	if rewrite == nil {
+		rewrite = &aclpb.Rewrite{
+			RewriteOperation: &aclpb.Rewrite_Union{
+				Union: &aclpb.SetOperation{
+					Children: []*aclpb.SetOperation_Child{
+						{ChildType: &aclpb.SetOperation_Child_XThis{}},
+					},
+				},
+			},
+		}
 	}
 
-	return nil, nil
+	return rewrite, nil
 }

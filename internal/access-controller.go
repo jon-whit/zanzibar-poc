@@ -24,6 +24,7 @@ type AccessController struct {
 	aclpb.UnimplementedWriteServiceServer
 	aclpb.UnimplementedReadServiceServer
 	aclpb.UnimplementedExpandServiceServer
+	aclpb.UnimplementedNamespaceConfigServiceServer
 
 	*Node
 	RelationTupleStore
@@ -128,10 +129,10 @@ func NewAccessController(opts ...AccessControllerOption) (*AccessController, err
 	return &ac, nil
 }
 
-func (a *AccessController) checkLeaf(ctx context.Context, operand interface{}, namespace, object, user string) (bool, error) {
+func (a *AccessController) checkLeaf(ctx context.Context, op *aclpb.SetOperation_Child, namespace, object, relation, user string) (bool, error) {
 
-	switch rewrite := operand.(type) {
-	case ThisRelation:
+	switch rewrite := op.GetChildType().(type) {
+	case *aclpb.SetOperation_Child_XThis:
 		obj := Object{
 			Namespace: namespace,
 			ID:        object,
@@ -140,7 +141,7 @@ func (a *AccessController) checkLeaf(ctx context.Context, operand interface{}, n
 		// do direct check here
 		query := RelationTupleQuery{
 			Object:    obj,
-			Relations: []string{rewrite.Relation},
+			Relations: []string{relation},
 			Subject:   &SubjectID{ID: user},
 		}
 		count, _ := a.RelationTupleStore.RowCount(ctx, query)
@@ -152,7 +153,7 @@ func (a *AccessController) checkLeaf(ctx context.Context, operand interface{}, n
 
 		// compute indirect ACLs referenced by usersets from the tuples
 		// SELECT * FROM namespace WHERE relation=<rewrite.relation> AND user LIKE '_%%:_%%#_%%'
-		usersets, _ := a.RelationTupleStore.Usersets(ctx, obj, rewrite.Relation)
+		usersets, _ := a.RelationTupleStore.Usersets(ctx, obj, relation)
 		// todo: capture error
 
 		for _, userset := range usersets {
@@ -168,22 +169,22 @@ func (a *AccessController) checkLeaf(ctx context.Context, operand interface{}, n
 		}
 
 		return false, nil
-	case ComputedUserset:
-		return a.check(ctx, namespace, object, rewrite.Relation, user)
-	case TupleToUserset:
+	case *aclpb.SetOperation_Child_ComputedUserset:
+		return a.check(ctx, namespace, object, rewrite.ComputedUserset.GetRelation(), user)
+	case *aclpb.SetOperation_Child_TupleToUserset:
 
 		obj := Object{
 			Namespace: namespace,
 			ID:        object,
 		}
 
-		usersets, _ := a.RelationTupleStore.Usersets(ctx, obj, rewrite.Tupleset.Relation)
+		usersets, _ := a.RelationTupleStore.Usersets(ctx, obj, rewrite.TupleToUserset.GetTupleset().GetRelation())
 
 		for _, userset := range usersets {
 			relation := userset.Relation
 
 			if relation == "..." {
-				relation = rewrite.ComputedUserset.Relation
+				relation = rewrite.TupleToUserset.GetComputedUserset().GetRelation()
 			}
 
 			permitted, err := a.check(ctx, userset.Object.Namespace, userset.Object.ID, relation, user)
@@ -202,27 +203,29 @@ func (a *AccessController) checkLeaf(ctx context.Context, operand interface{}, n
 	return false, nil
 }
 
-func (a *AccessController) checkRewrite(ctx context.Context, rule *RewriteRule, namespace, object, user string) (bool, error) {
-
-	if rule.Children == nil || len(rule.Children) < 1 {
-		return a.checkLeaf(ctx, rule.Operand, namespace, object, user)
-	}
+func (a *AccessController) checkRewrite(ctx context.Context, rule *aclpb.Rewrite, namespace, object, relation, user string) (bool, error) {
 
 	checkOutcomeCh := make(chan bool)
 	errCh := make(chan error)
 
 	var wg sync.WaitGroup
 
-	switch rule.Operator {
-	case Intersection:
+	switch o := rule.GetRewriteOperation().(type) {
+	case *aclpb.Rewrite_Intersection:
 
-		for _, child := range rule.Children {
+		for _, child := range o.Intersection.GetChildren() {
 			wg.Add(1)
 
-			go func(child *RewriteRule) {
+			go func(so *aclpb.SetOperation_Child) {
 				defer wg.Done()
 
-				permitted, err := a.checkRewrite(ctx, child, namespace, object, user)
+				var permitted bool
+				var err error
+				if rewrite := so.GetRewrite(); rewrite != nil {
+					permitted, err = a.checkRewrite(ctx, rewrite, namespace, object, relation, user)
+				} else {
+					permitted, err = a.checkLeaf(ctx, so, namespace, object, relation, user)
+				}
 				if err != nil {
 					errCh <- err
 					return
@@ -247,16 +250,23 @@ func (a *AccessController) checkRewrite(ctx context.Context, rule *RewriteRule, 
 		case <-ctx.Done():
 			return false, ctx.Err()
 		}
-	case Union:
+	case *aclpb.Rewrite_Union:
 
-		for _, child := range rule.Children {
+		for _, child := range o.Union.GetChildren() {
 			wg.Add(1)
 
 			// evaluate each child rule of the expression concurrently
-			go func(child *RewriteRule) {
+			go func(so *aclpb.SetOperation_Child) {
 				defer wg.Done()
 
-				permitted, err := a.checkRewrite(ctx, child, namespace, object, user)
+				var permitted bool
+				var err error
+				if rewrite := so.GetRewrite(); rewrite != nil {
+					permitted, err = a.checkRewrite(ctx, rewrite, namespace, object, relation, user)
+
+				} else {
+					permitted, err = a.checkLeaf(ctx, so, namespace, object, relation, user)
+				}
 				if err != nil {
 					errCh <- err
 					return
@@ -265,6 +275,7 @@ func (a *AccessController) checkRewrite(ctx context.Context, rule *RewriteRule, 
 				if permitted {
 					checkOutcomeCh <- true
 				}
+
 			}(child)
 		}
 
@@ -286,7 +297,7 @@ func (a *AccessController) checkRewrite(ctx context.Context, rule *RewriteRule, 
 	return false, nil
 }
 
-func (a *AccessController) check(ctx context.Context, namespace, object, relation, user string) (bool, error) {
+func (a *AccessController) check(ctx context.Context, namespace, object, relation, subject string) (bool, error) {
 
 	if peerChecksum, ok := FromContext(ctx); ok {
 		// The hash ring checksum of the peer should always be present if the
@@ -314,7 +325,7 @@ func (a *AccessController) check(ctx context.Context, namespace, object, relatio
 
 		modifiedCtx := context.WithValue(ctx, hashringChecksumKey, a.Hashring.Checksum())
 
-		subject := SubjectID{ID: user}
+		subject := SubjectID{ID: subject}
 
 		req := &aclpb.CheckRequest{
 			Namespace: namespace,
@@ -360,7 +371,7 @@ func (a *AccessController) check(ctx context.Context, namespace, object, relatio
 	}
 
 EVAL:
-	rewrite, err := a.NamespaceManager.GetRewriteRule(ctx, namespace, relation)
+	rewrite, err := a.NamespaceManager.GetRewrite(ctx, namespace, relation)
 	if err != nil {
 		return false, err
 	}
@@ -370,126 +381,118 @@ EVAL:
 		return false, status.Error(codes.InvalidArgument, message)
 	}
 
-	return a.checkRewrite(ctx, rewrite, namespace, object, user)
+	return a.checkRewrite(ctx, rewrite, namespace, object, relation, subject)
 }
 
-func (a *AccessController) expandWithRewrite(ctx context.Context, rewrite *RewriteRule, tree *Tree, namespace, object, relation string, depth uint) (*Tree, error) {
+func (a *AccessController) expandWithRewrite(ctx context.Context, rewrite *aclpb.Rewrite, tree *Tree, namespace, object, relation string, depth uint) (*Tree, error) {
 
-	op := rewrite.Operator
-	if op == Intersection || op == Union {
-		tree.Type = op.ToTreeNodeType()
+	op := rewrite.GetRewriteOperation()
 
-		for _, child := range rewrite.Children {
+	var children []*aclpb.SetOperation_Child
+	switch o := op.(type) {
+	case *aclpb.Rewrite_Intersection:
+		tree.Type = IntersectionNode
+		children = o.Intersection.GetChildren()
+	case *aclpb.Rewrite_Union:
+		tree.Type = UnionNode
+		children = o.Union.GetChildren()
+	}
 
-			subTree := tree
-			if child.Operator == Intersection || child.Operator == Union {
-				subTree = &Tree{
-					Type:    child.Operator.ToTreeNodeType(),
-					Subject: tree.Subject,
-				}
+	for _, child := range children {
+
+		rewrite := child.GetRewrite()
+		if rewrite != nil {
+			subTree := &Tree{
+				Subject: tree.Subject,
 			}
 
-			_, err := a.expandWithRewrite(ctx, child, subTree, namespace, object, relation, depth)
+			t, err := a.expandWithRewrite(ctx, rewrite, subTree, namespace, object, relation, depth)
 			if err != nil {
 				return nil, err
 			}
 
-			if child.Operator == Intersection || child.Operator == Union {
-				tree.Children = append(tree.Children, subTree)
-			}
-		}
+			tree.Children = append(tree.Children, t)
+		} else {
 
-		return tree, nil
-	}
-
-	// Easiest way to avoid this conditional is to rework the rewrites so that _this{}, computed_userset{}, or tuple_to_userset{} with no rewrites
-	// is equivalent to:
-	// union { child { _this{} } }
-	// union { child { computed_userset{ ... } } }
-	// union { child { tuple_to_userset{ ... } } }
-	//
-	// This way the conditionals above would set the tree's node type.
-	if tree.Type == "" {
-		tree.Type = UnionNode
-	}
-
-	// otherwise we're dealing with _this:{}, computed_userset{}, or tuple_to_userset{}
-	switch r := rewrite.Operand.(type) {
-	case ThisRelation:
-		tuples, err := a.RelationTupleStore.ListRelationTuples(ctx, &aclpb.ListRelationTuplesRequest_Query{
-			Namespace: namespace,
-			Object:    object,
-			Relations: []string{relation},
-		}, &fieldmaskpb.FieldMask{})
-		if err != nil {
-			return nil, err
-		}
-
-		for _, tuple := range tuples {
-			subject := tuple.Subject
-
-			if ss, isSubjectSet := subject.(*SubjectSet); isSubjectSet {
-
-				rr := ss.Relation
-				if rr == "..." {
-					rr = relation
+			// otherwise we're dealing with _this, computed_userset, or tuple_to_userset
+			switch so := child.GetChildType().(type) {
+			case *aclpb.SetOperation_Child_XThis:
+				tuples, err := a.RelationTupleStore.ListRelationTuples(ctx, &aclpb.ListRelationTuplesRequest_Query{
+					Namespace: namespace,
+					Object:    object,
+					Relations: []string{relation},
+				}, &fieldmaskpb.FieldMask{})
+				if err != nil {
+					return nil, err
 				}
-				t, err := a.expand(ctx, ss.Namespace, ss.Object, rr, depth)
+
+				for _, tuple := range tuples {
+					subject := tuple.Subject
+
+					if ss, isSubjectSet := subject.(*SubjectSet); isSubjectSet {
+
+						rr := ss.Relation
+						if rr == "..." {
+							rr = relation
+						}
+						t, err := a.expand(ctx, ss.Namespace, ss.Object, rr, depth)
+						if err != nil {
+							return nil, err
+						}
+
+						tree.Children = append(tree.Children, t)
+					} else {
+						tree.Children = append(tree.Children, &Tree{
+							Type:    LeafNode,
+							Subject: subject,
+						})
+					}
+				}
+			case *aclpb.SetOperation_Child_ComputedUserset:
+				t, err := a.expand(ctx, namespace, object, so.ComputedUserset.GetRelation(), depth)
 				if err != nil {
 					return nil, err
 				}
 
 				tree.Children = append(tree.Children, t)
-			} else {
-				tree.Children = append(tree.Children, &Tree{
-					Type:    LeafNode,
-					Subject: subject,
-				})
-			}
-		}
-	case ComputedUserset:
-		t, err := a.expand(ctx, namespace, object, r.Relation, depth)
-		if err != nil {
-			return nil, err
-		}
+			case *aclpb.SetOperation_Child_TupleToUserset:
 
-		tree.Children = append(tree.Children, t)
-	case TupleToUserset:
-
-		rr := r.Tupleset.Relation
-		if rr == "..." {
-			rr = relation
-		}
-
-		tuples, err := a.RelationTupleStore.ListRelationTuples(ctx, &aclpb.ListRelationTuplesRequest_Query{
-			Namespace: namespace,
-			Object:    object,
-			Relations: []string{rr},
-		}, &fieldmaskpb.FieldMask{})
-		if err != nil {
-			return nil, err
-		}
-
-		for _, tuple := range tuples {
-			subject := tuple.Subject
-
-			if ss, isSubjectSet := subject.(*SubjectSet); isSubjectSet {
-
-				rr := ss.Relation
+				rr := so.TupleToUserset.GetTupleset().GetRelation()
 				if rr == "..." {
 					rr = relation
 				}
-				t, err := a.expand(ctx, ss.Namespace, ss.Object, rr, depth)
+
+				tuples, err := a.RelationTupleStore.ListRelationTuples(ctx, &aclpb.ListRelationTuplesRequest_Query{
+					Namespace: namespace,
+					Object:    object,
+					Relations: []string{rr},
+				}, &fieldmaskpb.FieldMask{})
 				if err != nil {
 					return nil, err
 				}
 
-				tree.Children = append(tree.Children, t)
-			} else {
-				tree.Children = append(tree.Children, &Tree{
-					Type:    LeafNode,
-					Subject: subject,
-				})
+				for _, tuple := range tuples {
+					subject := tuple.Subject
+
+					if ss, isSubjectSet := subject.(*SubjectSet); isSubjectSet {
+
+						rr := ss.Relation
+						if rr == "..." {
+							rr = relation
+						}
+						t, err := a.expand(ctx, ss.Namespace, ss.Object, rr, depth)
+						if err != nil {
+							return nil, err
+						}
+
+						tree.Children = append(tree.Children, t)
+					} else {
+						tree.Children = append(tree.Children, &Tree{
+							Type:    LeafNode,
+							Subject: subject,
+						})
+					}
+				}
 			}
 		}
 	}
@@ -499,14 +502,9 @@ func (a *AccessController) expandWithRewrite(ctx context.Context, rewrite *Rewri
 
 func (a *AccessController) expand(ctx context.Context, namespace, object, relation string, depth uint) (*Tree, error) {
 
-	rewrite, err := a.NamespaceManager.GetRewriteRule(ctx, namespace, relation)
+	rewrite, err := a.NamespaceManager.GetRewrite(ctx, namespace, relation)
 	if err != nil {
 		return nil, err
-	}
-
-	if rewrite == nil {
-		message := fmt.Sprintf("No namespace configuration for relation '%s#%s' exists", namespace, relation)
-		return nil, status.Error(codes.InvalidArgument, message)
 	}
 
 	tree := &Tree{
@@ -598,6 +596,31 @@ func (a *AccessController) Expand(ctx context.Context, req *aclpb.ExpandRequest)
 
 	resp := &aclpb.ExpandResponse{
 		Tree: tree.ToProto(),
+	}
+
+	return resp, nil
+}
+
+func (a *AccessController) WriteConfig(ctx context.Context, req *aclpb.WriteConfigRequest) (*aclpb.WriteConfigResponse, error) {
+
+	if err := a.NamespaceManager.WriteConfig(ctx, req.GetConfig()); err != nil {
+		return nil, err
+	}
+
+	resp := &aclpb.WriteConfigResponse{}
+	return resp, nil
+}
+
+func (a *AccessController) ReadConfig(ctx context.Context, req *aclpb.ReadConfigRequest) (*aclpb.ReadConfigResponse, error) {
+
+	config, err := a.NamespaceManager.GetConfig(ctx, req.GetNamespace())
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &aclpb.ReadConfigResponse{
+		Namespace: req.GetNamespace(),
+		Config:    config,
 	}
 
 	return resp, nil
