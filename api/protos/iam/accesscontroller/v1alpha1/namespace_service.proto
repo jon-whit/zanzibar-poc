@@ -72,7 +72,7 @@ message SetOperation {
 
         oneof child_type {
             This _this = 1;
-            ComputedUserset computed_userset = 2;
+            ComputedSubjectset computed_subjectset = 2;
             TupleToUserset tuple_to_userset = 3;
             Rewrite rewrite = 4;
         }
@@ -85,9 +85,9 @@ message TupleToUserset {
     message Tupleset { string relation = 1; }
 
     Tupleset tupleset = 1;
-    ComputedUserset computed_userset = 2;
+    ComputedSubjectset computed_userset = 2;
 }
 
-message ComputedUserset {
+message ComputedSubjectset {
     string relation = 2;
 }

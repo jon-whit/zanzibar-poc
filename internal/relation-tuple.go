@@ -17,16 +17,6 @@ type Object struct {
 	ID        string
 }
 
-// Userset represents an object and relation in the form of `object#relation`
-type Userset struct {
-	Relation string
-	Object   Object
-}
-
-func (u Userset) String() string {
-	return fmt.Sprintf("%s:%s#%s", u.Object.Namespace, u.Object.ID, u.Relation)
-}
-
 type Subject interface {
 	json.Marshaler
 

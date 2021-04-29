@@ -18,6 +18,7 @@
   "paths": {
     "/iam/access-controller/v1alpha1/namespace-configs": {
       "get": {
+        "summary": "Read a namespace configuration.",
         "operationId": "NamespaceConfigService_ReadConfig",
         "responses": {
           "200": {
@@ -52,6 +53,7 @@
         ]
       },
       "post": {
+        "summary": "Write a new namespace configuration, overwriting any prior one.",
         "operationId": "NamespaceConfigService_WriteConfig",
         "responses": {
           "200": {
@@ -93,8 +95,8 @@
         "This": {
           "$ref": "#/definitions/ChildThis"
         },
-        "computedUserset": {
-          "$ref": "#/definitions/v1alpha1ComputedUserset"
+        "computedSubjectset": {
+          "$ref": "#/definitions/v1alpha1ComputedSubjectset"
         },
         "tupleToUserset": {
           "$ref": "#/definitions/v1alpha1TupleToUserset"
@@ -142,12 +144,11 @@
         }
       }
     },
-    "v1alpha1ComputedUserset": {
+    "v1alpha1ComputedSubjectset": {
       "type": "object",
       "properties": {
         "relation": {
-          "type": "string",
-          "title": "Object object = 1;"
+          "type": "string"
         }
       }
     },
@@ -177,7 +178,8 @@
         "snaptoken": {
           "type": "string"
         }
-      }
+      },
+      "description": "The response for a NamespaceConfigService.ReadConfig rpc."
     },
     "v1alpha1Relation": {
       "type": "object",
@@ -219,7 +221,7 @@
           "$ref": "#/definitions/TupleToUsersetTupleset"
         },
         "computedUserset": {
-          "$ref": "#/definitions/v1alpha1ComputedUserset"
+          "$ref": "#/definitions/v1alpha1ComputedSubjectset"
         }
       }
     },
@@ -229,7 +231,8 @@
         "config": {
           "$ref": "#/definitions/v1alpha1NamespaceConfig"
         }
-      }
+      },
+      "description": "The request for a NamespaceConfigService.WriteConfig rpc."
     },
     "v1alpha1WriteConfigResponse": {
       "type": "object",
@@ -237,7 +240,8 @@
         "snaptoken": {
           "type": "string"
         }
-      }
+      },
+      "description": "The response for a NamespaceConfigService.WriteConfig rpc."
     }
   }
 }

@@ -17,7 +17,7 @@ type SQLStore struct {
 	ConnPool *pgxpool.Pool
 }
 
-func (s *SQLStore) Usersets(ctx context.Context, object ac.Object, relations ...string) ([]ac.Userset, error) {
+func (s *SQLStore) SubjectSets(ctx context.Context, object ac.Object, relations ...string) ([]ac.SubjectSet, error) {
 
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -40,7 +40,7 @@ func (s *SQLStore) Usersets(ctx context.Context, object ac.Object, relations ...
 		return nil, err
 	}
 
-	usersets := []ac.Userset{}
+	subjects := []ac.SubjectSet{}
 	for rows.Next() {
 		var s string
 		if err := rows.Scan(&s); err != nil {
@@ -52,19 +52,11 @@ func (s *SQLStore) Usersets(ctx context.Context, object ac.Object, relations ...
 			return nil, err
 		}
 
-		userset := ac.Userset{
-			Object: ac.Object{
-				Namespace: subjectSet.Namespace,
-				ID:        subjectSet.Object,
-			},
-			Relation: subjectSet.Relation,
-		}
-
-		usersets = append(usersets, userset)
+		subjects = append(subjects, subjectSet)
 	}
 	rows.Close()
 
-	return usersets, nil
+	return subjects, nil
 }
 
 func (s *SQLStore) RowCount(ctx context.Context, query ac.RelationTupleQuery) (int64, error) {

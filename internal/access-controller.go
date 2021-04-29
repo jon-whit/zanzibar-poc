@@ -153,12 +153,12 @@ func (a *AccessController) checkLeaf(ctx context.Context, op *aclpb.SetOperation
 
 		// compute indirect ACLs referenced by usersets from the tuples
 		// SELECT * FROM namespace WHERE relation=<rewrite.relation> AND user LIKE '_%%:_%%#_%%'
-		usersets, _ := a.RelationTupleStore.Usersets(ctx, obj, relation)
+		subjects, _ := a.RelationTupleStore.SubjectSets(ctx, obj, relation)
 		// todo: capture error
 
-		for _, userset := range usersets {
+		for _, subject := range subjects {
 
-			permitted, err := a.check(ctx, userset.Object.Namespace, userset.Object.ID, userset.Relation, user)
+			permitted, err := a.check(ctx, subject.Namespace, subject.Object, subject.Relation, user)
 			if err != nil {
 				return false, err
 			}
@@ -169,8 +169,8 @@ func (a *AccessController) checkLeaf(ctx context.Context, op *aclpb.SetOperation
 		}
 
 		return false, nil
-	case *aclpb.SetOperation_Child_ComputedUserset:
-		return a.check(ctx, namespace, object, rewrite.ComputedUserset.GetRelation(), user)
+	case *aclpb.SetOperation_Child_ComputedSubjectset:
+		return a.check(ctx, namespace, object, rewrite.ComputedSubjectset.GetRelation(), user)
 	case *aclpb.SetOperation_Child_TupleToUserset:
 
 		obj := Object{
@@ -178,16 +178,16 @@ func (a *AccessController) checkLeaf(ctx context.Context, op *aclpb.SetOperation
 			ID:        object,
 		}
 
-		usersets, _ := a.RelationTupleStore.Usersets(ctx, obj, rewrite.TupleToUserset.GetTupleset().GetRelation())
+		subjects, _ := a.RelationTupleStore.SubjectSets(ctx, obj, rewrite.TupleToUserset.GetTupleset().GetRelation())
 
-		for _, userset := range usersets {
-			relation := userset.Relation
+		for _, subject := range subjects {
+			relation := subject.Relation
 
 			if relation == "..." {
 				relation = rewrite.TupleToUserset.GetComputedUserset().GetRelation()
 			}
 
-			permitted, err := a.check(ctx, userset.Object.Namespace, userset.Object.ID, relation, user)
+			permitted, err := a.check(ctx, subject.Namespace, subject.Object, relation, user)
 			if err != nil {
 				return false, err
 			}
@@ -448,8 +448,8 @@ func (a *AccessController) expandWithRewrite(ctx context.Context, rewrite *aclpb
 						})
 					}
 				}
-			case *aclpb.SetOperation_Child_ComputedUserset:
-				t, err := a.expand(ctx, namespace, object, so.ComputedUserset.GetRelation(), depth)
+			case *aclpb.SetOperation_Child_ComputedSubjectset:
+				t, err := a.expand(ctx, namespace, object, so.ComputedSubjectset.GetRelation(), depth)
 				if err != nil {
 					return nil, err
 				}
